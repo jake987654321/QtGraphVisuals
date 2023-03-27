@@ -1,29 +1,12 @@
 
 import sys
 import networkx as nx
-from PySide6.QtCore import Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF, QRect, QRectF
-from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout, QVBoxLayout, QGraphicsView, QGraphicsScene,
-        QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox)
+from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
+        QRect, QRectF)
+from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
+        QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
+        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
-from qt_material import apply_stylesheet
-
-## Debugging
-class CoordinateViewer(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._properties = [PropertyTextBox() for i in range(30)]
-        [p.setVisible(False) for p in self._properties]
-
-        layout = QVBoxLayout()
-        [layout.addWidget(p) for p in self._properties]
-            
-        self.setLayout(layout)
-
-    @Slot(dict)
-    def set(self, config):
-        for i,(k,v) in enumerate(config.items()):
-            self._properties[i].set(k,v)
-            self._properties[i].setVisible(True)
 
 ## Application
 class GraphViewerWidget(QWidget):
@@ -42,9 +25,6 @@ class GraphViewerWidget(QWidget):
         layout.addWidget(self._graph_viewer)
         layout.addWidget(self._properties_viewer)
         self.setLayout(layout)
-
-        # TODO::Set Default Size 
-        self.resize(800,600)
 
 class PropertiesViewer(QGroupBox):
     def __init__(self, config={}, parent=None): 
@@ -100,20 +80,10 @@ class PropertyViewerTextBox(QWidget):
 class GraphViewer(QGraphicsView):
     clicked = Signal(tuple)
 
-    # Temporary graph generation function
-    def graph(self):
-        edge_list = []
-        edge_list.append( (1,2) )
-        edge_list.append( (1,3) )
-        edge_list.append( (2,4) )
-        edge_list.append( (3,4) )
-        edge_list.append( (4,5) )
-        edge_list.append( (2,5) )
 
-        return nx.DiGraph(edge_list)
-
-    def __init__(self, parent=None):
+    def __init__(self, graph=None, parent=None):
         super().__init__(parent)
+        self._graph = graph
 
         # Configure QGraphicsView
         self.setTransformationAnchor(QGraphicsView.NoAnchor)
@@ -124,14 +94,12 @@ class GraphViewer(QGraphicsView):
 
         # Create/Configure the Scene
         self._scene = QGraphicsScene(self)
-        self._vgraph = VisualGraph(self.graph())
+        self._vgraph = VisualGraph(self._graph)
         self.setScene(self._scene)
         self.scene().addItem(self._vgraph)
 
         # Set scene bounding rect
-        br = self.scene().itemsBoundingRect()
-        bound = int(max(br.width()*10, br.height()*10))
-        self.scene().setSceneRect(-1*bound, -1*bound, bound*2, bound*2)
+        self.scene().setSceneRect(self.scene().itemsBoundingRect())
 
         # State
         self._dragging = False
@@ -158,8 +126,6 @@ class GraphViewer(QGraphicsView):
             self.setCursor(Qt.ArrowCursor)
             if self._selected:
                 self.clicked.emit(self._selected.get_properties())
-            #else:
-                #self.clicked.emit({})
         super().mouseReleaseEvent(e)
 
     def mouseMoveEvent(self, e):
@@ -176,12 +142,6 @@ class GraphViewer(QGraphicsView):
                 self.translate(delta.x(), delta.y())
                 self._last_drag_pos = QPointF(e.position())
 
-        # TODO::Remove debug
-        #self.clicked.emit({
-        #    'View Coord': e.position(), 
-        #    'Scene Coord': self.mapToScene(e.position().toPoint()), 
-        #    'viewPortTransform':self.viewportTransform()
-        #    })
         super().mouseMoveEvent(e)
 
     def wheelEvent(self, e):
@@ -203,8 +163,11 @@ class GraphViewer(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
+    def setGraph(self, graph):
+        self._vgraph.setGraph(graph)
+
 class VisualGraph(QGraphicsItem):
-    def __init__(self, graph, parent=None):
+    def __init__(self, graph=None, parent=None):
         super().__init__(parent=parent)
 
         # Drawing Config
@@ -219,9 +182,8 @@ class VisualGraph(QGraphicsItem):
         self._graph = graph
         self._node_to_vnode_map = {}
 
-        positions = self.calculate_positions()
-        self.create_visual_nodes(positions)
-
+        if graph:
+            self.setGraph(graph)
         self._bounding_rect = self.childrenBoundingRect()
 
     def calculate_positions(self):
@@ -243,10 +205,11 @@ class VisualGraph(QGraphicsItem):
                     self.brush, parent=self)
 
     def paint(self, painter, option, widget=None):
-        #painter.drawRect(self._bounding_rect)
+        if not self._graph:
+            return
+
         for x,y in self._graph.edges:
             self.paintEdge(x, y, painter) 
-            #painter.drawLine(self.edge_to_line(x,y))
 
     def paintEdge(self, from_node, to_node, painter):
         n0, n1 = self._node_to_vnode_map[from_node], self._node_to_vnode_map[to_node]
@@ -273,6 +236,15 @@ class VisualGraph(QGraphicsItem):
     def childrenMoved(self):
         self._bounding_rect = self.childrenBoundingRect()
         self.update()
+
+    def setGraph(self, graph):
+        if not isinstance(graph, nx.DiGraph):
+            raise ValueError()
+        self._graph = graph
+        positions = self.calculate_positions()
+        self.create_visual_nodes(positions)
+        self._bounding_rect = self.childrenBoundingRect()
+
 
 class VisualNode(QGraphicsItem):
     def __init__(self, node, pos, size, pen, brush, parent=None):
@@ -316,15 +288,3 @@ class GraphLayout:
     def __init__(self):
         pass
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-
-    extra={ "secondaryDarkColor":"#232629", "font_size": '15px',}
-    apply_stylesheet(app, theme='dark_blue.xml', extra=extra)
-
-
-    viewer = GraphViewer()
-    #viewer = GraphViewerWidget()
-    viewer.show()
-
-    sys.exit(app.exec())
