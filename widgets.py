@@ -5,16 +5,17 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
         QRect, QRectF)
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
-        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox)
+        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
+        QScrollArea, QFrame)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
 
 ## Application
-class GraphViewerWidget(QWidget):
-    def __init__(self, parent=None):
+class GraphViewer(QWidget):
+    def __init__(self, graph, parent=None):
         super().__init__(parent)
 
         # Children
-        self._graph_viewer = GraphViewer(parent=self)
+        self._graph_viewer = GraphViewerWindow(graph, parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
 
         # Connections
@@ -26,20 +27,33 @@ class GraphViewerWidget(QWidget):
         layout.addWidget(self._properties_viewer)
         self.setLayout(layout)
 
+    def setGraph(self, graph):
+        self._graph_viewer.setGraph(graph)
+
 class PropertiesViewer(QGroupBox):
     def __init__(self, config={}, parent=None): 
         super().__init__(parent)
 
         # Configure
-        self.setTitle('properties')
+        self.setLayout(QVBoxLayout())
+        self.setMinimumHeight(300)
+        self.setMaximumWidth(300)
+        self.setTitle('Properties')
 
-        self.property_text_boxes = [PropertyViewerTextBox() for i in range(30)]
+        self.scroll = QScrollArea(parent=self)
+        self.scroll.setWidgetResizable(True)
+
+        self.group = QWidget(parent=self.scroll)
+        self.group.setLayout(QVBoxLayout())
+
+        self.property_text_boxes = [PropertyViewerTextBox(parent=self.group) for i in range(30)]
         [p.setVisible(False) for p in self.property_text_boxes]
 
-        layout = QVBoxLayout()
-        [layout.addWidget(p) for p in self.property_text_boxes]
-        layout.setAlignment(Qt.AlignTop)
-        self.setLayout(layout)
+        [self.group.layout().addWidget(p) for p in self.property_text_boxes]
+        self.group.layout().setAlignment(Qt.AlignTop)
+
+        self.scroll.setWidget(self.group)
+        self.layout().addWidget(self.scroll)
 
         self.setConfig(config)
 
@@ -52,32 +66,38 @@ class PropertiesViewer(QGroupBox):
 
         # Create 
         for i,(k,v) in enumerate(config.items()):
+            if i > 30:
+                break
+
             self.property_text_boxes[i].set(k,v)
             self.property_text_boxes[i].setVisible(True)
+        self.show()
 
 class PropertyViewerTextBox(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.__name = QLabel()
-        self.__name.setMinimumWidth(200)
-        self.__name.setMaximumWidth(200)
+        self._name = QLabel()
+        self._name.setMinimumWidth(100)
+        self._name.setMaximumWidth(100)
 
-        self.__value = QLabel()
-        self.__value.setStyleSheet(
-                "QLabel {background: rgb(49, 54, 59);border-radius: 5px;} ")
-        self.__value.setMinimumHeight(30)
+        self._value = QLabel()
+        self._value.setStyleSheet("QLabel {background: rgb(49, 54, 59); border-radius: 3px;} ")
+        self._value.setFixedHeight(24)
+        self._value.setIndent(3)
+        self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         layout = QHBoxLayout()
-        layout.addWidget(self.__name)
-        layout.addWidget(self.__value)
+        layout.addWidget(self._name)
+        layout.addWidget(self._value)
+        layout.setContentsMargins(0,0,0,0)
         self.setLayout(layout)
 
     def set(self, name, value):
-        self.__name.setText(f"{name}")
-        self.__value.setText(f"  {value}  ")
+        self._name.setText(f"{name}")
+        self._value.setText(f"{value}")
 
 # Graph Viewer
-class GraphViewer(QGraphicsView):
+class GraphViewerWindow(QGraphicsView):
     clicked = Signal(tuple)
 
 
@@ -94,9 +114,10 @@ class GraphViewer(QGraphicsView):
 
         # Create/Configure the Scene
         self._scene = QGraphicsScene(self)
-        self._vgraph = VisualGraph(self._graph)
         self.setScene(self._scene)
-        self.scene().addItem(self._vgraph)
+
+        self._vgraph = None
+        self.setGraph(self._graph)
 
         # Set scene bounding rect
         self.scene().setSceneRect(self.scene().itemsBoundingRect())
@@ -126,6 +147,7 @@ class GraphViewer(QGraphicsView):
             self.setCursor(Qt.ArrowCursor)
             if self._selected:
                 self.clicked.emit(self._selected.get_properties())
+                #self.scene().setSceneRect(self.scene().itemsBoundingRect())
         super().mouseReleaseEvent(e)
 
     def mouseMoveEvent(self, e):
@@ -164,7 +186,19 @@ class GraphViewer(QGraphicsView):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
     def setGraph(self, graph):
-        self._vgraph.setGraph(graph)
+        self.scene().clear()
+
+        self._graph = graph
+        self._vgraph = VisualGraph(graph)
+        self.scene().addItem(self._vgraph)
+        self.scene().setSceneRect(self.scene().itemsBoundingRect())
+
+        # reset-state
+        self._dragging = False
+        self._selected = None
+
+        # Center the Scene
+        self.centerScene()
 
 class VisualGraph(QGraphicsItem):
     def __init__(self, graph=None, parent=None):
@@ -175,7 +209,7 @@ class VisualGraph(QGraphicsItem):
         self.y_spacing = 2*self.node_size
         self.x_spacing = 2*self.node_size
 
-        self.brush = QBrush(Qt.green)
+        self.brush = QBrush(Qt.darkGreen)
         self.pen = QPen(Qt.black, 2)
 
         # State 
@@ -245,7 +279,6 @@ class VisualGraph(QGraphicsItem):
         self.create_visual_nodes(positions)
         self._bounding_rect = self.childrenBoundingRect()
 
-
 class VisualNode(QGraphicsItem):
     def __init__(self, node, pos, size, pen, brush, parent=None):
         super().__init__(parent)
@@ -262,12 +295,13 @@ class VisualNode(QGraphicsItem):
         self.text = QGraphicsTextItem(str(node), parent=self)
         self.text.setPos(self.shell.boundingRect().center() - self.text.boundingRect().center())
         self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.text.setDefaultTextColor(Qt.white)
 
         self.setPos(pos - self.boundingRect().center())
 
     def get_properties(self):
-        if hasattr(self.node, 'get_properties'):
-            return self.node.get_properties()
+        if hasattr(self.node, 'get_config'):
+            return self.node.get_config()
         else:
             return {'type': type(self.node).__name__, 'name': self.node}
 
