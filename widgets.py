@@ -6,29 +6,50 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
-        QScrollArea, QFrame)
+        QScrollArea, QFrame, QTabWidget)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
 
 ## Application
 class GraphViewer(QWidget):
-    def __init__(self, graph, parent=None):
+    def __init__(self, views, parent=None):
         super().__init__(parent)
 
         # Children
-        self._graph_viewer = GraphViewerWindow(graph, parent=self)
+        self._tabs = QTabWidget(parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
 
-        # Connections
-        self._graph_viewer.clicked.connect(self._properties_viewer.setConfig)
+        # Create views
+        self._views = {}
+        [self.addView(name, graph) for name,graph in views.items()]
 
         # Layout
-        layout = QHBoxLayout()
-        layout.addWidget(self._graph_viewer)
-        layout.addWidget(self._properties_viewer)
-        self.setLayout(layout)
+        self.setLayout(QHBoxLayout())
+        self.layout().addWidget(self._tabs)
+        self.layout().addWidget(self._properties_viewer)
 
-    def setGraph(self, graph):
-        self._graph_viewer.setGraph(graph)
+    def clearViews(self):
+        for name, view in self._views.items():
+            self._tabs.removeTab(self._tabs.indexOf(view))
+            view.deleteLater()
+        self._views.clear()
+
+    def removeView(self, view_name):
+        if view_name not in self._views:
+            raise ValueError(f"{view_name} is not a view")
+        gv = self._views.pop(view_name)
+        self._tabs.removeTab(self._tabs.indexOf(gv))
+        gv.deleteLater()
+
+    def addView(self, view_name, graph):
+        if view_name in self._views:
+            raise ValueError(f"{view_name} already exsists")
+        gv = GraphViewerWindow(graph, parent=self)
+        self._views[view_name] = gv
+        gv.clicked.connect(self._properties_viewer.setConfig)
+        self._tabs.addTab(gv, view_name)
+
+    def setView(self, view_name, graph):
+        self._views[view_name].setGraph(graph)
 
 class PropertiesViewer(QGroupBox):
     def __init__(self, config={}, parent=None): 
@@ -81,7 +102,7 @@ class PropertyViewerTextBox(QWidget):
         self._name.setMaximumWidth(100)
 
         self._value = QLabel()
-        self._value.setStyleSheet("QLabel {background: rgb(49, 54, 59); border-radius: 3px;} ")
+        self._value.setStyleSheet("QLabel {background: rgb(49, 54, 59); border-radius: 3px;}")
         self._value.setFixedHeight(24)
         self._value.setIndent(3)
         self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -99,7 +120,6 @@ class PropertyViewerTextBox(QWidget):
 # Graph Viewer
 class GraphViewerWindow(QGraphicsView):
     clicked = Signal(tuple)
-
 
     def __init__(self, graph=None, parent=None):
         super().__init__(parent)
