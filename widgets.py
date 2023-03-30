@@ -1,5 +1,6 @@
 
-import sys, json
+
+import sys, json, pathlib
 import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
@@ -12,8 +13,10 @@ from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
 
 # Load default visual schemes 
 default_visual_schemes = {}
-with open('default_visual_schemes.json', 'r') as f:
+path = pathlib.Path(__file__).parent
+with open(path / 'default_visual_schemes.json', 'r') as f:
     default_visual_schemes = json.loads(f.read())
+
 
 ## Application
 class GraphViewer(QWidget):

@@ -1,0 +1,23 @@
+{
+  "default": {
+    "nodes": {
+      "default": {"fillColor": "darkGray", "boundarySize": "2",  "size": "50"}
+    },
+    "node_label": "__str__"
+  },
+
+  "keras": {
+    "nodes": {
+        "default": {"fillColor": "darkGray", "boundarySize": "2",  "size": "50"},
+        "Conv2D": {"fillColor": "darkBlue", "boundarySize": "2",  "size": "50"},
+        "DepthwiseConv2D": {"fillColor": "darkBlue", "boundarySize": "2",  "size": "50"},
+        "Activation": {"fillColor": "darkRed", "boundarySize": "2",  "size": "50"},
+        "ReLU": {"fillColor": "darkRed", "boundarySize": "2",  "size": ["50","25"]},
+        "BatchNormalization": {"fillColor": "darkMagenta", "boundarySize": "2",  "size": "50"},
+        "MaxPooling2D": {"fillColor": "darkGreen", "boundarySize": "2",  "size": "50"},
+        "AveragePooling2D": {"fillColor": "darkGreen", "boundarySize": "2",  "size": "50"},
+        "GlobalAveragePooling2D": {"fillColor": "darkGreen", "boundarySize": "2",  "size": "50"}
+    },
+    "node_label": null
+  }
+}
