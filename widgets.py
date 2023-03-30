@@ -1,6 +1,7 @@
 
-import sys
+import sys, json
 import networkx as nx
+import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
         QRect, QRectF)
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
@@ -8,6 +9,11 @@ from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
         QScrollArea, QFrame, QTabWidget)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
+
+# Load default visual schemes 
+default_visual_schemes = {}
+with open('default_visual_schemes.json', 'r') as f:
+    default_visual_schemes = json.loads(f.read())
 
 ## Application
 class GraphViewer(QWidget):
@@ -26,6 +32,13 @@ class GraphViewer(QWidget):
         self.setLayout(QHBoxLayout())
         self.layout().addWidget(self._tabs)
         self.layout().addWidget(self._properties_viewer)
+
+        # Connect
+        self._tabs.currentChanged.connect(self.tabChanged)
+
+    @Slot(int)
+    def tabChanged(self, idx):
+        self._tabs.currentWidget().centerScene()
 
     def clearViews(self):
         for name, view in self._views.items():
@@ -51,6 +64,10 @@ class GraphViewer(QWidget):
     def setView(self, view_name, graph):
         self._views[view_name].setGraph(graph)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._tabs.currentWidget().centerScene()
+
 class PropertiesViewer(QGroupBox):
     def __init__(self, config={}, parent=None): 
         super().__init__(parent)
@@ -58,6 +75,7 @@ class PropertiesViewer(QGroupBox):
         # Configure
         self.setLayout(QVBoxLayout())
         self.setMinimumHeight(300)
+        self.setMinimumWidth(300)
         self.setMaximumWidth(300)
         self.setTitle('Properties')
 
@@ -140,7 +158,7 @@ class GraphViewerWindow(QGraphicsView):
         self.setGraph(self._graph)
 
         # Set scene bounding rect
-        self.scene().setSceneRect(self.scene().itemsBoundingRect())
+        self.setSceneRect()
 
         # State
         self._dragging = False
@@ -148,6 +166,12 @@ class GraphViewerWindow(QGraphicsView):
 
         # Center the Scene
         self.centerScene()
+
+    def setSceneRect(self):
+        br = self.scene().itemsBoundingRect()
+        size = QPointF(br.height(), br.width())*10
+        tl, br = br.center()-size, br.center()+size
+        self.scene().setSceneRect(QRectF(tl, br))
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
@@ -205,29 +229,49 @@ class GraphViewerWindow(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
-    def setGraph(self, graph):
+    def setGraph(self, graph, visual_scheme=None):
         self.scene().clear()
+        
+        # Convert graph (if not already a DiGraph) and set visual scheme (if not specified)
+        if isinstance(graph, nx.DiGraph):
+            self._graph = graph
+            if visual_scheme is None:
+                visual_scheme = default_visual_schemes['default']
+        elif 'keras' in graph.__module__:
+            self._graph = self.kerasToDiGraph(graph)
+            if visual_scheme is None:
+                visual_scheme = default_visual_schemes['keras']
 
-        self._graph = graph
-        self._vgraph = VisualGraph(graph)
+        self._vgraph = VisualGraph(self._graph, visual_scheme=visual_scheme)
         self.scene().addItem(self._vgraph)
-        self.scene().setSceneRect(self.scene().itemsBoundingRect())
+        self.setSceneRect()
 
         # reset-state
         self._dragging = False
         self._selected = None
 
-        # Center the Scene
-        self.centerScene()
+    def kerasToDiGraph(self, keras_graph):
+        from tensorflow import keras
+
+        graph = nx.DiGraph(name=keras_graph.name)
+        for layer in keras_graph.layers:
+            if layer not in graph:
+                graph.add_node(layer)
+
+            for keras_node in layer.outbound_nodes:
+                graph.add_edge(layer, keras_node.layer)
+
+        return graph
 
 class VisualGraph(QGraphicsItem):
-    def __init__(self, graph=None, parent=None):
+    def __init__(self, graph=None, visual_scheme=None, parent=None):
         super().__init__(parent=parent)
 
         # Drawing Config
-        self.node_size = 50
-        self.y_spacing = 2*self.node_size
-        self.x_spacing = 2*self.node_size
+        self.visual_scheme = visual_scheme
+        self.node_size = 75
+        self.y_spacing = 1.25*self.node_size
+        self.x_spacing = 1.25*self.node_size
 
         self.brush = QBrush(Qt.darkGreen)
         self.pen = QPen(Qt.black, 2)
@@ -235,6 +279,7 @@ class VisualGraph(QGraphicsItem):
         # State 
         self._graph = graph
         self._node_to_vnode_map = {}
+        self._generation_map = {}
 
         if graph:
             self.setGraph(graph)
@@ -243,20 +288,43 @@ class VisualGraph(QGraphicsItem):
     def calculate_positions(self):
         x, y = 0, 0
         positions = {}
-        for generation in nx.topological_generations(self._graph):
-            x = 0
-            for node in generation:
-                positions[node] = (x,y)
-                x += self.x_spacing
+        self._generation_map = {}
+        for i, generation in enumerate(nx.topological_generations(self._graph)):
+            N, S = len(generation), self.x_spacing
+            xs = np.arange(N)*S - (N-1)/2*S 
+            for node,x in zip(generation,xs):
+                self._generation_map[node] = i
+                positions[node] = [x,y]
             y += self.y_spacing
+
+        for generation in list(nx.topological_generations(self._graph)):
+            ideal_x = []
+            for node in generation:
+                out_node_x = [positions[out_node][0] for out_node in self._graph.predecessors(node)]
+                if out_node_x:
+                    ideal_x.append(np.average(out_node_x))
+                else:
+                    ideal_x.append(positions[node][0])
+
+            for i in range(len(ideal_x[:-1])):
+                xdelta = ideal_x[i+1] - ideal_x[i]
+                if xdelta < self.x_spacing:
+                    for j in range(len(ideal_x)):
+                        if j <= i:
+                            ideal_x[j] -= (self.x_spacing - xdelta)
+                        else:
+                            ideal_x[j] += (self.x_spacing - xdelta)
+
+            for i,node in enumerate(generation):
+                positions[node][0] = ideal_x[i]
+
         return positions
 
     def create_visual_nodes(self, positions):
         for node,pos in positions.items():
             l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
             self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
-                    QPointF(self.node_size,self.node_size), self.pen,
-                    self.brush, parent=self)
+                    self.visual_scheme, parent=self)
 
     def paint(self, painter, option, widget=None):
         if not self._graph:
@@ -265,27 +333,62 @@ class VisualGraph(QGraphicsItem):
         for x,y in self._graph.edges:
             self.paintEdge(x, y, painter) 
 
+
     def paintEdge(self, from_node, to_node, painter):
         n0, n1 = self._node_to_vnode_map[from_node], self._node_to_vnode_map[to_node]
         n0_center = n0.pos() + n0.boundingRect().center()
         n1_center = n1.pos() + n1.boundingRect().center()
-        line = QLineF(n1_center, n0_center)
+        t, b = n0_center.y(), n1_center.y()
+        l, r = n0_center.x(), n1_center.x()
 
-        c = line.center()
-        u = line.unitVector().p1() - line.unitVector().p2()
+        generational_gap = self._generation_map[to_node] - self._generation_map[from_node]
+        if  generational_gap > 1 and abs(l - r) < self.x_spacing/4:
+            w = self.x_spacing * generational_gap/4 
+            rect = QRectF(l-w/2, t, w, b-t)
+            start, span = 90*16, np.sign(l-r+0.001)*180*16
+            painter.drawArc(rect, start, span)
 
-        arrow_left = QLineF(c+3*u, c-3*u)
-        arrow_left.setAngle(line.angle()+30)
+            #t, b = n0_center.y(), n1_center.y()
+            #l, r = n0_center.x(), n1_center.x()
+            #w, h = (r-l)*2, (b-t)*2
+            #if abs(l - r) < self.x_spacing/4:
+            #    w = self.x_spacing * generational_gap/4 
+            #    rect = QRectF(l-w/2, t, w, b-t)
+            #    start, span = 90*16, np.sign(l-r)*180*16
+            #else:
+            #    rect = QRectF(l-w/2, t, w, h)
+            #    if w >= 0 and h >= 0:
+            #        start, span = 0, 90*16
+            #    elif w < 0 and h >= 0:
+            #        start, span = 180*16, -90*16
+            #    elif w >= 0 and h < 0:
+            #        start, span = 0, -90*16
+            #    elif w < 0 and h < 0:
+            #        start, span = 180*16, 90*16
+            #painter.drawArc(rect, start, span)
 
-        arrow_right = QLineF(c+3*u, c-3*u)
-        arrow_right.setAngle(line.angle()-30)
+        else:
+            line = QLineF(n1_center, n0_center)
+            painter.drawLine(line)
 
-        painter.drawLine(line)
-        painter.drawLine(arrow_left)
-        painter.drawLine(arrow_right)
+            c = line.center()
+            u = line.unitVector().p1() - line.unitVector().p2()
+
+            # Arrow head
+            arrow_left = QLineF(c+3*u, c-3*u)
+            arrow_left.setAngle(line.angle()+30)
+
+            arrow_right = QLineF(c+3*u, c-3*u)
+            arrow_right.setAngle(line.angle()-30)
+
+            painter.setPen(Qt.white)
+            painter.drawLine(arrow_left)
+            painter.drawLine(arrow_right)
 
     def boundingRect(self):
-        return self._bounding_rect
+        br = self.childrenBoundingRect()
+        size = QPointF(br.width(), br.height())
+        return QRectF(br.center()-size*2, br.center()+size*2)#self._bounding_rect
 
     def childrenMoved(self):
         self._bounding_rect = self.childrenBoundingRect()
@@ -300,24 +403,59 @@ class VisualGraph(QGraphicsItem):
         self._bounding_rect = self.childrenBoundingRect()
 
 class VisualNode(QGraphicsItem):
-    def __init__(self, node, pos, size, pen, brush, parent=None):
+    def __init__(self, node, pos, visual_scheme, parent=None):
         super().__init__(parent)
         # Keep reference to node
+        self.visual_scheme = visual_scheme
         self.node = node
 
-        # set node outline
-        self.shell = QGraphicsEllipseItem(0, 0, size.x(), size.y(), parent=self)
-        self.shell.setPen(pen)
-        self.shell.setBrush(brush)
+        # set node config
+        self.node_label, self.pen, self.brush, self.size = None, None, None, None
+        self.setNodeConfig()
+
+        # set node shell
+        self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
+        self.shell.setBrush(self.brush)
+        self.shell.setPen(self.pen)
         self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
 
         # set text
-        self.text = QGraphicsTextItem(str(node), parent=self)
+        self.text = QGraphicsTextItem(self.label_text, parent=self)
         self.text.setPos(self.shell.boundingRect().center() - self.text.boundingRect().center())
         self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         self.text.setDefaultTextColor(Qt.white)
 
         self.setPos(pos - self.boundingRect().center())
+
+    def setNodeConfig(self):
+        ntype = type(self.node).__name__
+        default_config = self.visual_scheme['nodes'].get('default', {})
+        config = self.visual_scheme['nodes'].get(ntype, default_config)
+
+        # Pen
+        self.pen = QPen(Qt.black, int(config.get("boundarySize", 0)))
+        
+        # Brush
+        color = config.get("fillColor", 'darkGray')
+        self.brush = QBrush(getattr(Qt, color))
+
+        # Size
+        size = config.get('size', [20,20])
+        if not isinstance(size, list):
+            size = [size, size]
+        self.size = [int(s) for s in size]
+
+        # Node Label
+        label_attr = config.get('label_attr', None) 
+        if label_attr:
+            attr = getattr(node, label_attr)
+            if callable(attr):
+                txt = attr()
+            else:
+                txt = attr
+        else:
+            txt = type(self.node).__name__
+        self.label_text = txt
 
     def get_properties(self):
         if hasattr(self.node, 'get_config'):
