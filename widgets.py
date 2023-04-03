@@ -8,7 +8,7 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
-        QScrollArea, QFrame, QTabWidget)
+        QScrollArea, QFrame, QTabWidget, QSplitter)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
 
 # Load default visual schemes 
@@ -16,7 +16,6 @@ default_visual_schemes = {}
 path = pathlib.Path(__file__).parent
 with open(path / 'default_visual_schemes.json', 'r') as f:
     default_visual_schemes = json.loads(f.read())
-
 
 ## Application
 class GraphViewer(QWidget):
@@ -32,16 +31,19 @@ class GraphViewer(QWidget):
         [self.addView(name, graph) for name,graph in views.items()]
 
         # Layout
-        self.setLayout(QHBoxLayout())
-        self.layout().addWidget(self._tabs)
-        self.layout().addWidget(self._properties_viewer)
+        self.setLayout(QVBoxLayout())
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.addWidget(self._tabs)
+        self._splitter.addWidget(self._properties_viewer)
+        self.layout().addWidget(self._splitter)
 
         # Connect
         self._tabs.currentChanged.connect(self.tabChanged)
 
     @Slot(int)
     def tabChanged(self, idx):
-        self._tabs.currentWidget().centerScene()
+        if self._tabs.currentWidget():
+            self._tabs.currentWidget().centerScene()
 
     def clearViews(self):
         for name, view in self._views.items():
@@ -56,10 +58,10 @@ class GraphViewer(QWidget):
         self._tabs.removeTab(self._tabs.indexOf(gv))
         gv.deleteLater()
 
-    def addView(self, view_name, graph):
+    def addView(self, view_name, graph, visual_scheme=None):
         if view_name in self._views:
             raise ValueError(f"{view_name} already exsists")
-        gv = GraphViewerWindow(graph, parent=self)
+        gv = GraphViewerWindow(graph, visual_scheme, parent=self)
         self._views[view_name] = gv
         gv.clicked.connect(self._properties_viewer.setConfig)
         self._tabs.addTab(gv, view_name)
@@ -77,9 +79,9 @@ class PropertiesViewer(QGroupBox):
 
         # Configure
         self.setLayout(QVBoxLayout())
-        self.setMinimumHeight(300)
-        self.setMinimumWidth(300)
-        self.setMaximumWidth(300)
+        #self.setMinimumHeight(300)
+        #self.setMinimumWidth(300)
+        #self.setMaximumWidth(300)
         self.setTitle('Properties')
 
         self.scroll = QScrollArea(parent=self)
@@ -88,7 +90,7 @@ class PropertiesViewer(QGroupBox):
         self.group = QWidget(parent=self.scroll)
         self.group.setLayout(QVBoxLayout())
 
-        self.property_text_boxes = [PropertyViewerTextBox(parent=self.group) for i in range(30)]
+        self.property_text_boxes = [PropertyViewerTextBox(parent=self.group) for i in range(100)]
         [p.setVisible(False) for p in self.property_text_boxes]
 
         [self.group.layout().addWidget(p) for p in self.property_text_boxes]
@@ -108,9 +110,8 @@ class PropertiesViewer(QGroupBox):
 
         # Create 
         for i,(k,v) in enumerate(config.items()):
-            if i > 30:
+            if i > 99:
                 break
-
             self.property_text_boxes[i].set(k,v)
             self.property_text_boxes[i].setVisible(True)
         self.show()
@@ -142,7 +143,7 @@ class PropertyViewerTextBox(QWidget):
 class GraphViewerWindow(QGraphicsView):
     clicked = Signal(tuple)
 
-    def __init__(self, graph=None, parent=None):
+    def __init__(self, graph=None, visual_scheme=None, parent=None):
         super().__init__(parent)
         self._graph = graph
 
@@ -158,7 +159,7 @@ class GraphViewerWindow(QGraphicsView):
         self.setScene(self._scene)
 
         self._vgraph = None
-        self.setGraph(self._graph)
+        self.setGraph(self._graph, visual_scheme)
 
         # Set scene bounding rect
         self.setSceneRect()
