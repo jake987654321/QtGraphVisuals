@@ -452,7 +452,7 @@ class VisualNode(QGraphicsItem):
         # Node Label
         label_attr = config.get('label_attr', None) 
         if label_attr:
-            attr = getattr(node, label_attr)
+            attr = getattr(self.node, label_attr)
             if callable(attr):
                 txt = attr()
             else:
@@ -464,6 +464,8 @@ class VisualNode(QGraphicsItem):
     def get_properties(self):
         if hasattr(self.node, 'get_config'):
             return self.node.get_config()
+        elif hasattr(self.node, '__dict__'):
+            return self.node.__dict__
         else:
             return {'type': type(self.node).__name__, 'name': self.node}
 
