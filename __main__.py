@@ -20,7 +20,8 @@ if __name__ == "__main__":
     extra={ "secondaryDarkColor":"#232629", "font_size": '15px',}
     apply_stylesheet(app, theme='dark_blue.xml', extra=extra)
 
-    viewer = QGraphViewer({'g1':graph1(), 'g2':graph2()})
+    viewer = QGraphViewer({'graph1': graph1(), 'graph2':graph2()})
+    viewer.resize(800,600)
     viewer.show()
 
     sys.exit(app.exec())

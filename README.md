@@ -1,2 +1,2 @@
 # QtGraphVisuals
-View directed graphs in a qt widget implemented in pyside6!
+View directed graphs with a qt-widget implemented using pyside6!
