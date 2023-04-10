@@ -10,7 +10,12 @@ def graph1():
     return nx.DiGraph([(1,2), (1,3), (2,4), (3,4), (4,5), (2,5)])
 
 def graph2():
-    return nx.DiGraph([(1,2), (1,3), (1,4)])
+    from tensorflow import keras
+    model = keras.applications.ResNet50()
+    model = keras.models.Model(inputs=model.inputs, outputs=model.layers[15].output)
+    return model 
+    #return nx.DiGraph([(1,2), (2,3), (3,4)])
+    #return nx.DiGraph([(1,2), (1,3), (1,4)])
 
 if __name__ == "__main__":
 

@@ -4,7 +4,7 @@ import sys, json, pathlib
 import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
-        QRect, QRectF)
+        QRect, QRectF, QTimer)
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
@@ -39,6 +39,7 @@ class GraphViewer(QWidget):
 
         # Connect
         self._tabs.currentChanged.connect(self.tabChanged)
+
 
     @Slot(int)
     def tabChanged(self, idx):
@@ -171,6 +172,16 @@ class GraphViewerWindow(QGraphicsView):
         # Center the Scene
         self.centerScene()
 
+        # Timer
+        self._timer = QTimer()
+        self._timer.timeout.connect(self._vgraph.update_positions)
+        self._timer.start(33)
+
+
+    def keyPressEvent(self, e):
+        if e.text() == ' ': 
+            self._vgraph._simulate = not self._vgraph._simulate
+
     def setSceneRect(self):
         br = self.scene().itemsBoundingRect()
         size = QPointF(br.height(), br.width())*10
@@ -281,6 +292,7 @@ class VisualGraph(QGraphicsItem):
         self.pen = QPen(Qt.black, 2)
 
         # State 
+        self._simulate = True
         self._graph = graph
         self._node_to_vnode_map = {}
         self._generation_map = {}
@@ -324,10 +336,54 @@ class VisualGraph(QGraphicsItem):
 
         return positions
 
+    @Slot()
+    def update_positions(self):
+        if not self._simulate:
+            return
+
+        # Paint 'force'
+        F0 = 1000
+        F1 = F0 / (self.x_spacing**2 + self.y_spacing**2)
+        
+        for x in self._graph:
+            if not list(self._graph.predecessors(x)):
+                continue
+            if not list(self._graph.successors(x)):
+                continue
+
+            vx = self._node_to_vnode_map[x]
+            total_force = QPointF(0,0)
+            for y in self._graph:
+                if x is y:
+                    continue
+                vy = self._node_to_vnode_map[y]
+
+                # Sum up all repulsive forces and attractive forces
+                len_ = QLineF(vx.pos(), vy.pos()).length()
+                if len_ == 0: 
+                    continue
+                dir_ = (vx.pos() - vy.pos()) / len_
+                total_force += F0 / len_ * dir_ 
+                if self._graph.has_edge(x,y) or self._graph.has_edge(y,x):
+                    total_force -= F1 * len_ * dir_ * 5 
+
+            vx.setPos(vx.pos() + total_force/5)
+
+        #for x in self._node_to_vnode_map.values():
+        #    total_force = QPoint(0,0)
+        #    for y in self._node_to_vnode_map.values():
+        #        # Sum up all repulsive forces and attractive forces
+        #        dir_ = (y.pos() - x.pos()) / QLineF(x.pos(), y.pos()).length()
+        #        force = 1 / QLineF(x.pos(), y.pos()).length()
+        #        total_force += new_force
+
+            #pos = vnode.pos()
+            #dir_ = QPoint(np.random.randint(-1,2), np.random.randint(-1,2))
+            #vnode.setPos(pos+dir_)
+
     def create_visual_nodes(self, positions):
         for node,pos in positions.items():
-            l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
-            self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
+            self._node_to_vnode_map[node] = VisualNode(node, QPointF(*pos),
                     self.visual_scheme, parent=self)
 
     def paint(self, painter, option, widget=None):
@@ -336,6 +392,37 @@ class VisualGraph(QGraphicsItem):
 
         for x,y in self._graph.edges:
             self.paintEdge(x, y, painter) 
+
+        # Paint 'force'
+        F0 = 1000
+        F1 = F0 / (self.x_spacing**2 + self.y_spacing**2)
+        
+        for x in self._graph:
+            total_force = QPointF(0,0)
+            for y in self._graph:
+                if x is y:
+                    continue
+                vx = self._node_to_vnode_map[x]
+                vy = self._node_to_vnode_map[y]
+
+                # Sum up all repulsive forces and attractive forces
+                len_ = QLineF(vx.pos(), vy.pos()).length()
+                if len_ == 0: 
+                    continue
+                dir_ = (vx.pos() - vy.pos()) / len_
+                total_force += F0 / len_ * dir_ 
+                if self._graph.has_edge(x,y) or self._graph.has_edge(y,x):
+                    total_force -= F1 * len_ * dir_ 
+
+            #breakpoint()
+            force_dir = total_force / QLineF(QPointF(0,0), total_force).length()
+            offset = force_dir * vx.boundingRect().width() / 2
+            x_center = vx.pos() + vx.boundingRect().center() + offset
+            line = QLineF(x_center, x_center + total_force)
+            painter.setPen(Qt.blue)
+            painter.drawLine(line)
+            painter.setPen(Qt.white)
+
 
 
     def paintEdge(self, from_node, to_node, painter):
