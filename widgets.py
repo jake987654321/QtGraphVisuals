@@ -7,7 +7,7 @@ from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
         QRect, QRectF)
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
-        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGroupBox,
+        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGraphicsLineItem, QGroupBox,
         QScrollArea, QFrame, QTabWidget, QSplitter)
 from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
 
@@ -180,7 +180,8 @@ class GraphViewerWindow(QGraphicsView):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             item = self.itemAt(e.position().toPoint())
-            if item and not isinstance(item, VisualGraph):
+
+            if isinstance(item, VisualNode):# and not isinstance(item, VisualGraph):
                 self._selected = item
             else:
                 self._selected = None
@@ -237,12 +238,12 @@ class GraphViewerWindow(QGraphicsView):
         self.scene().clear()
         
         # Convert graph (if not already a DiGraph) and set visual scheme (if not specified)
-        if isinstance(graph, nx.DiGraph):
+        if isinstance(graph, nx.MultiDiGraph):
             self._graph = graph
             if visual_scheme is None:
                 visual_scheme = default_visual_schemes['default']
         elif 'keras' in graph.__module__:
-            self._graph = self.kerasToDiGraph(graph)
+            self._graph = self.kerasToMultiDiGraph(graph)
             if visual_scheme is None:
                 visual_scheme = default_visual_schemes['keras']
 
@@ -254,10 +255,10 @@ class GraphViewerWindow(QGraphicsView):
         self._dragging = False
         self._selected = None
 
-    def kerasToDiGraph(self, keras_graph):
+    def kerasToMultiDiGraph(self, keras_graph):
         from tensorflow import keras
 
-        graph = nx.DiGraph(name=keras_graph.name)
+        graph = nx.MultiDiGraph(name=keras_graph.name)
         for layer in keras_graph.layers:
             if layer not in graph:
                 graph.add_node(layer)
@@ -283,6 +284,8 @@ class VisualGraph(QGraphicsItem):
         # State 
         self._graph = graph
         self._node_to_vnode_map = {}
+        self._edge_to_vedge_map = {}
+
         self._generation_map = {}
 
         if graph:
@@ -330,13 +333,20 @@ class VisualGraph(QGraphicsItem):
             self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
                     self.visual_scheme, parent=self)
 
+    def create_visual_edges(self):
+        self._edge_to_vedge_map.clear()
+        for u,v,key in self._graph.edges:
+            from_vnode = self._node_to_vnode_map[u]
+            to_vnode = self._node_to_vnode_map[v]
+            self._edge_to_vedge_map[(u,v)] = VisualEdge((u,v), from_vnode.center(), to_vnode.center(), parent=self)
+
     def paint(self, painter, option, widget=None):
         if not self._graph:
             return
 
-        for x,y in self._graph.edges:
-            self.paintEdge(x, y, painter) 
-
+        for x,y,_ in self._graph.edges:
+            pass
+            #self.paintEdge(x, y, painter) 
 
     def paintEdge(self, from_node, to_node, painter):
         n0, n1 = self._node_to_vnode_map[from_node], self._node_to_vnode_map[to_node]
@@ -394,17 +404,73 @@ class VisualGraph(QGraphicsItem):
         size = QPointF(br.width(), br.height())
         return QRectF(br.center()-size*2, br.center()+size*2)#self._bounding_rect
 
-    def childrenMoved(self):
+    def childrenMoved(self, child):
         self._bounding_rect = self.childrenBoundingRect()
+        self.update_adjacent_edges(child.node)
         self.update()
 
+    def update_adjacent_edges(self, node):
+        for u,v in self._graph.in_edges(node):
+            from_vnode = self._node_to_vnode_map[u]
+            to_vnode = self._node_to_vnode_map[v]
+            self._edge_to_vedge_map[(u,v)].updatePoints(from_vnode.center(), to_vnode.center())
+
+        for u,v in self._graph.out_edges(node):
+            from_vnode = self._node_to_vnode_map[u]
+            to_vnode = self._node_to_vnode_map[v]
+            self._edge_to_vedge_map[(u,v)].updatePoints(from_vnode.center(), to_vnode.center())
+
     def setGraph(self, graph):
-        if not isinstance(graph, nx.DiGraph):
+        if not isinstance(graph, nx.MultiDiGraph):
             raise ValueError()
         self._graph = graph
         positions = self.calculate_positions()
         self.create_visual_nodes(positions)
+        self.create_visual_edges()
         self._bounding_rect = self.childrenBoundingRect()
+
+class VisualEdge(QGraphicsItem):
+    def __init__(self, edge, p0, p1, parent=None):
+        super().__init__(parent)
+        # Keep reference to node
+        self.edge = edge
+        self.p0, self.p1 = p0, p1
+        self.line = QGraphicsLineItem(QLineF(p1,p0), parent=self)
+        self.arrow_left = QGraphicsLineItem(parent=self)
+        self.arrow_right = QGraphicsLineItem(parent=self)
+
+        self.line.setPen(QPen(Qt.white))
+        self.arrow_left.setPen(QPen(Qt.white))
+        self.arrow_right.setPen(QPen(Qt.white))
+
+        self.setZValue(-1)
+        self.setArrowHead()
+
+    def setArrowHead(self):
+        c = self.line.line().center()
+        u = self.line.line().unitVector().p1() - self.line.line().unitVector().p2()
+        angle = self.line.line().angle()
+
+        # Arrow head
+        arrow_right = QLineF(c+3*u, c-3*u)
+        arrow_right.setAngle(angle+30)
+
+        arrow_left = QLineF(c+3*u, c-3*u)
+        arrow_left.setAngle(angle-30)
+
+        self.arrow_left.setLine(arrow_left)
+        self.arrow_right.setLine(arrow_right)
+
+
+    def updatePoints(self, p0, p1):
+        self.line.setLine(QLineF(p1,p0))
+        self.setArrowHead()
+
+    def paint(self, painter, option, widget=None):
+        pass
+
+    def boundingRect(self):
+        return self.childrenBoundingRect() 
 
 class VisualNode(QGraphicsItem):
     def __init__(self, node, pos, visual_scheme, parent=None):
@@ -421,15 +487,17 @@ class VisualNode(QGraphicsItem):
         self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
         self.shell.setBrush(self.brush)
         self.shell.setPen(self.pen)
+        self.shell.setEnabled(False)
         self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
 
         # set text
         self.text = QGraphicsTextItem(self.label_text, parent=self)
         self.text.setPos(self.shell.boundingRect().center() - self.text.boundingRect().center())
         self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.text.setEnabled(False)
         self.text.setDefaultTextColor(Qt.white)
 
-        self.setPos(pos - self.boundingRect().center())
+        super().setPos(pos - self.boundingRect().center())
 
     def setNodeConfig(self):
         ntype = type(self.node).__name__
@@ -475,9 +543,12 @@ class VisualNode(QGraphicsItem):
     def boundingRect(self):
         return self.childrenBoundingRect() 
 
+    def center(self):
+        return self.pos() + self.childrenBoundingRect().center()
+
     def setPos(self, pos):
         super().setPos(pos)
-        self.parentItem().childrenMoved()
+        self.parentItem().childrenMoved(self)
 
     def mousePressEvent(self, e):
         super().mousePressEvent(e)
