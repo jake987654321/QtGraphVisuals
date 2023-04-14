@@ -1,5 +1,4 @@
 
-
 import sys, json, pathlib
 import networkx as nx
 import numpy as np
@@ -167,6 +166,7 @@ class GraphViewerWindow(QGraphicsView):
         # State
         self._dragging = False
         self._selected = None
+        self._hovering = None
 
         # Center the Scene
         self.centerScene()
@@ -199,7 +199,29 @@ class GraphViewerWindow(QGraphicsView):
                 #self.scene().setSceneRect(self.scene().itemsBoundingRect())
         super().mouseReleaseEvent(e)
 
+    def _checkHovering(self, e):
+        item = self.itemAt(e.position().toPoint())
+        if not item and not self._hovering:
+            pass
+        elif item and not self._hovering:
+            if hasattr(item, 'setHovering'):
+                item.setHovering(True)
+            self._hovering = item
+        elif not item and self._hovering:
+            if hasattr(self._hovering, 'setHovering'):
+                self._hovering.setHovering(False)
+            self._hovering = None 
+        else: # item and self._hovering
+            if not item is self._hovering:
+                if hasattr(self._hovering, 'setHovering'):
+                    self._hovering.setHovering(False)
+                if hasattr(item, 'setHovering'):
+                    item.setHovering(True)
+                self._hovering = item
+
     def mouseMoveEvent(self, e):
+        self._checkHovering(e)
+
         if self._dragging:
             if self._selected:
                 pos = self.mapToScene(e.position().toPoint()) - self._selected.boundingRect().center()
@@ -255,17 +277,31 @@ class GraphViewerWindow(QGraphicsView):
         self._dragging = False
         self._selected = None
 
-    def kerasToMultiDiGraph(self, keras_graph):
+    def kerasToMultiDiGraph(self, model):
         from tensorflow import keras
+        graph = nx.MultiDiGraph()
 
-        graph = nx.MultiDiGraph(name=keras_graph.name)
-        for layer in keras_graph.layers:
-            if layer not in graph:
-                graph.add_node(layer)
+        # Add all 'Layers' (aka nodes) to the graph
+        graph.add_nodes_from(model.layers)
 
-            for keras_node in layer.outbound_nodes:
-                graph.add_edge(layer, keras_node.layer)
+        # Get a set of all 'Nodes' (aka edges) in the keras graph
+        keras_nodes = []
+        for layer in model.layers:
+            for node in layer.outbound_nodes:
+                keras_nodes.append(node)
+        keras_nodes = set(keras_nodes)
 
+        # Add the edges to the graph
+        for kn in keras_nodes:
+            input_layers = kn.inbound_layers
+            if not isinstance(input_layers, list): 
+                input_layers = [input_layers]
+            output_layer = kn.outbound_layer
+
+            for index, input_layer in enumerate(input_layers):
+                shape = input_layer.output_shape
+                graph.add_edge(input_layer, output_layer,
+                            in_index=0, out_index=index, shape=shape)
         return graph
 
 class VisualGraph(QGraphicsItem):
@@ -335,10 +371,8 @@ class VisualGraph(QGraphicsItem):
 
     def create_visual_edges(self):
         self._edge_to_vedge_map.clear()
-        for u,v,key in self._graph.edges:
-            from_vnode = self._node_to_vnode_map[u]
-            to_vnode = self._node_to_vnode_map[v]
-            self._edge_to_vedge_map[(u,v)] = VisualEdge((u,v), from_vnode.center(), to_vnode.center(), parent=self)
+        for u,v,key,data in self._graph.edges(keys=True, data=True):
+            self._edge_to_vedge_map[(u,v,key)] = VisualEdge((u,v,key,data), parent=self)
 
     def paint(self, painter, option, widget=None):
         if not self._graph:
@@ -362,26 +396,8 @@ class VisualGraph(QGraphicsItem):
             start, span = 90*16, np.sign(l-r+0.001)*180*16
             painter.drawArc(rect, start, span)
 
-            #t, b = n0_center.y(), n1_center.y()
-            #l, r = n0_center.x(), n1_center.x()
-            #w, h = (r-l)*2, (b-t)*2
-            #if abs(l - r) < self.x_spacing/4:
-            #    w = self.x_spacing * generational_gap/4 
-            #    rect = QRectF(l-w/2, t, w, b-t)
-            #    start, span = 90*16, np.sign(l-r)*180*16
-            #else:
-            #    rect = QRectF(l-w/2, t, w, h)
-            #    if w >= 0 and h >= 0:
-            #        start, span = 0, 90*16
-            #    elif w < 0 and h >= 0:
-            #        start, span = 180*16, -90*16
-            #    elif w >= 0 and h < 0:
-            #        start, span = 0, -90*16
-            #    elif w < 0 and h < 0:
-            #        start, span = 180*16, 90*16
-            #painter.drawArc(rect, start, span)
-
         else:
+
             line = QLineF(n1_center, n0_center)
             painter.drawLine(line)
 
@@ -407,49 +423,72 @@ class VisualGraph(QGraphicsItem):
     def childrenMoved(self, child):
         self._bounding_rect = self.childrenBoundingRect()
         self.update_adjacent_edges(child.node)
-        self.update()
+        #self.update()
 
     def update_adjacent_edges(self, node):
-        for u,v in self._graph.in_edges(node):
-            from_vnode = self._node_to_vnode_map[u]
-            to_vnode = self._node_to_vnode_map[v]
-            self._edge_to_vedge_map[(u,v)].updatePoints(from_vnode.center(), to_vnode.center())
+        for u,v,idx in self._graph.in_edges(node, keys=True):
+            self._edge_to_vedge_map[(u,v,idx)].updatePath()
 
-        for u,v in self._graph.out_edges(node):
-            from_vnode = self._node_to_vnode_map[u]
-            to_vnode = self._node_to_vnode_map[v]
-            self._edge_to_vedge_map[(u,v)].updatePoints(from_vnode.center(), to_vnode.center())
+        for u,v,idx in self._graph.out_edges(node, keys=True):
+            self._edge_to_vedge_map[(u,v,idx)].updatePath()
 
     def setGraph(self, graph):
-        if not isinstance(graph, nx.MultiDiGraph):
-            raise ValueError()
-        self._graph = graph
+        self._graph = nx.MultiDiGraph(graph)
         positions = self.calculate_positions()
         self.create_visual_nodes(positions)
         self.create_visual_edges()
         self._bounding_rect = self.childrenBoundingRect()
 
 class VisualEdge(QGraphicsItem):
-    def __init__(self, edge, p0, p1, parent=None):
-        super().__init__(parent)
-        # Keep reference to node
+    def __init__(self, edge, parent=None):
+        super().__init__(parent=parent)
+
+        # Unpack the edge
         self.edge = edge
-        self.p0, self.p1 = p0, p1
-        self.line = QGraphicsLineItem(QLineF(p1,p0), parent=self)
+        self.in_node, self.out_node, self.key, self.data = edge
+        self.in_vnode = self.parentItem()._node_to_vnode_map[self.in_node]
+        self.out_vnode = self.parentItem()._node_to_vnode_map[self.out_node]
+
+        # Create the graphics items
+        self.path = QGraphicsLineItem(parent=self)
         self.arrow_left = QGraphicsLineItem(parent=self)
         self.arrow_right = QGraphicsLineItem(parent=self)
+        self.text = QGraphicsTextItem(str(self.data), parent=self)#str(self.data))
 
-        self.line.setPen(QPen(Qt.white))
+        self.path.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.arrow_left.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.arrow_right.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.text.setVisible(False)
+
+        # Colorize
+        self.path.setPen(QPen(Qt.white))
         self.arrow_left.setPen(QPen(Qt.white))
         self.arrow_right.setPen(QPen(Qt.white))
+        self.text.setDefaultTextColor(Qt.lightGray)
 
+        # Calculate graphic items positions
         self.setZValue(-1)
-        self.setArrowHead()
+        self.calculatePath()
+        self.calculateArrowHead()
+        self.calculateText()
 
-    def setArrowHead(self):
-        c = self.line.line().center()
-        u = self.line.line().unitVector().p1() - self.line.line().unitVector().p2()
-        angle = self.line.line().angle()
+    def calculatePath(self):
+        delta = 0
+        if isinstance(self.key, int):
+            if self.key != 0:
+                delta = 8 if self.key % 2 else -8
+
+        line = QLineF(self.out_vnode.center(), self.in_vnode.center())
+        if delta:
+            offset = (line.normalVector().unitVector().p2() - line.p1()) * delta
+            line.translate(offset)
+        self.path.setLine(line)
+
+    def calculateArrowHead(self):
+        c = self.path.line().center()
+        u = self.path.line().unitVector().p1() - self.path.line().unitVector().p2()
+        angle = self.path.line().angle()
 
         # Arrow head
         arrow_right = QLineF(c+3*u, c-3*u)
@@ -461,16 +500,32 @@ class VisualEdge(QGraphicsItem):
         self.arrow_left.setLine(arrow_left)
         self.arrow_right.setLine(arrow_right)
 
+    def calculateText(self):
+        self.text.setPos(self.path.line().center())
 
-    def updatePoints(self, p0, p1):
-        self.line.setLine(QLineF(p1,p0))
-        self.setArrowHead()
+    def updatePath(self):
+        self.calculatePath()
+        self.calculateArrowHead()
+        self.calculateText()
+
+    def setHovering(self, state):
+        if state:
+            self.path.setPen(QPen(Qt.red))
+            self.arrow_left.setPen(QPen(Qt.red))
+            self.arrow_right.setPen(QPen(Qt.red))
+            self.text.setVisible(True)
+        else:
+            self.path.setPen(QPen(Qt.white))
+            self.arrow_left.setPen(QPen(Qt.white))
+            self.arrow_right.setPen(QPen(Qt.white))
+            self.text.setVisible(False)
+        self.update()
 
     def paint(self, painter, option, widget=None):
         pass
 
     def boundingRect(self):
-        return self.childrenBoundingRect() 
+        return QRectF(self.arrow_left.boundingRect()).united(self.arrow_right.boundingRect())
 
 class VisualNode(QGraphicsItem):
     def __init__(self, node, pos, visual_scheme, parent=None):
