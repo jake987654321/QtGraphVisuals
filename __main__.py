@@ -7,10 +7,10 @@ import networkx as nx
 
 # Temporary graph generation function
 def graph1():
-    return nx.DiGraph([(1,2), (1,3), (2,4), (3,4), (4,5), (2,5)])
+    return nx.MultiDiGraph([(1,2), (1,3), (2,4), (3,4), (4,5), (2,5)])
 
 def graph2():
-    return nx.DiGraph([(1,2), (1,3), (1,4)])
+    return nx.MultiDiGraph([(1,2), (1,3), (1,4)])
 
 if __name__ == "__main__":
 
