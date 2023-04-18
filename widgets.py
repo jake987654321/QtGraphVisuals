@@ -268,6 +268,10 @@ class GraphViewerWindow(QGraphicsView):
             self._graph = self.kerasToMultiDiGraph(graph)
             if visual_scheme is None:
                 visual_scheme = default_visual_schemes['keras']
+        elif 'onnx' in graph.__module__:
+            self._graph = self.onnxToMultiDiGraph(graph)
+            if visual_scheme is None:
+                visual_scheme = default_visual_schemes['default']
 
         self._vgraph = VisualGraph(self._graph, visual_scheme=visual_scheme)
         self.scene().addItem(self._vgraph)
@@ -277,8 +281,55 @@ class GraphViewerWindow(QGraphicsView):
         self._dragging = False
         self._selected = None
 
+    def onnxToMultiDiGraph(self, model):
+        # Initialize a NetworkX MultiDiGraph
+        G = nx.MultiDiGraph(name=model.graph.name)
+
+        # Add nodes to the graph
+        for node in model.graph.node:
+            G.add_node(node.name, node=node)
+
+        # Add initializer data to the nodes
+        for init in model.graph.initializer:
+            for node in model.graph.node:
+                if init.name in node.input:
+                    G.nodes[node.name][init.name] = init
+        
+        # Add edges to the graph
+        for value in model.graph.value_info:
+            u, v = None, None 
+            in_index, out_index = 0, 0
+            for node in model.graph.node :
+                if value.name in node.output:
+                    u = node.name
+                    out_index = list(node.output).index(value.name)
+                if value.name in node.input:
+                    v = node.name
+                    in_index = list(node.input).index(value.name)
+            if u and v:
+                G.add_edge(u, v, in_index=in_index, out_index=out_index, value=value)
+
+        # Add input / output nodes (and edges) to the graph
+        for inout in list(model.graph.input) + list(model.graph.output):
+            for node in model.graph.node:
+
+                # Add output node
+                if inout.name in node.output:
+                    index = list(node.output).index(inout.name)
+                    G.add_node(inout.name, node=inout)
+                    G.add_edge(node.name, inout.name, in_index=index, out_index=0)
+                    break
+
+                # Add input node
+                if inout.name in node.input:
+                    index = list(node.input).index(inout.name)
+                    G.add_node(inout.name, node=inout)
+                    G.add_edge(inout.name, node.name, in_index=0, out_index=index)
+                    break
+
+        return G
+
     def kerasToMultiDiGraph(self, model):
-        from tensorflow import keras
         graph = nx.MultiDiGraph()
 
         # Add all 'Layers' (aka nodes) to the graph
