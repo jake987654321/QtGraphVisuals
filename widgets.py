@@ -282,6 +282,8 @@ class GraphViewerWindow(QGraphicsView):
         self._selected = None
 
     def onnxToMultiDiGraph(self, model):
+        import onnx 
+
         # Initialize a NetworkX MultiDiGraph
         G = nx.MultiDiGraph(name=model.graph.name)
 
@@ -327,6 +329,24 @@ class GraphViewerWindow(QGraphicsView):
                     G.add_edge(inout.name, node.name, in_index=0, out_index=index)
                     break
 
+        # Set Visual Schemes
+        for node_name,data in G.nodes(data=True):
+            node = data['node']
+            vs = {'boundaySize': 2, 'size': 50, 'label':node_name}
+            if isinstance(node, onnx.ValueInfoProto):
+                G.nodes[node_name]['visual_scheme'] = vs
+                continue
+
+            vs['label'] = node.op_type.lower()
+            if 'conv' in node.op_type.lower():
+                vs['fillColor'] = 'darkBlue'
+            elif 'pool' in node.op_type.lower():
+                vs['fillColor'] = 'darkGreen'
+            elif 'elu' in node.op_type.lower():
+                vs['fillColor'] = 'darkRed'
+                vs['size'] = [50,25]
+            G.nodes[node_name]['visual_scheme'] = vs
+
         return G
 
     def kerasToMultiDiGraph(self, model):
@@ -353,6 +373,28 @@ class GraphViewerWindow(QGraphicsView):
                 shape = input_layer.output_shape
                 graph.add_edge(input_layer, output_layer,
                             in_index=0, out_index=index, shape=shape)
+
+        # Set Visual Schemes
+        for node in graph.nodes():
+            ntype = type(node).__name__
+            vs = {'boundaySize': 2, 'size': 50, 'label': ntype}
+
+            if 'conv' in ntype.lower():
+                vs['fillColor'] = 'darkBlue'
+            elif 'pool' in ntype.lower():
+                vs['fillColor'] = 'darkGreen'
+            elif 'elu' in ntype.lower() or 'activation' in ntype.lower():
+                vs['fillColor'] = 'darkRed'
+                vs['size'] = [50,25]
+            elif 'normalization' in ntype.lower():
+                vs['fillColor'] = 'darkMagenta'
+                vs['size'] = [50,25]
+            elif graph.in_degree(node) > 1:
+                vs['fillColor'] = 'black'
+                vs['size'] = [50,25]
+
+            graph.nodes[node]['visual_scheme'] = vs
+
         return graph
 
 class VisualGraph(QGraphicsItem):
@@ -417,8 +459,10 @@ class VisualGraph(QGraphicsItem):
     def create_visual_nodes(self, positions):
         for node,pos in positions.items():
             l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
+
+            visual_scheme = self._graph.nodes[node].get('visual_scheme', {})
             self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
-                    self.visual_scheme, parent=self)
+                    visual_scheme, parent=self)
 
     def create_visual_edges(self):
         self._edge_to_vedge_map.clear()
@@ -579,22 +623,42 @@ class VisualEdge(QGraphicsItem):
         return QRectF(self.arrow_left.boundingRect()).united(self.arrow_right.boundingRect())
 
 class VisualNode(QGraphicsItem):
+    class Background(QGraphicsItem):
+        def __init__(self, brush, pen, parent=None):
+            super().__init__(parent=parent)
+            self._boundary = None
+            self.brush = brush
+            self.pen = pen
+
+        def setBoundingRect(self, boundary):
+            self._boundary = boundary
+
+        def boundingRect(self):
+            return self._boundary
+
+        def paint(self, painter, option, widget=None):
+            pass
+            #painter.setBrush(self.brush)
+            #painter.drawRoundedRect(self.boundingRect(), 5, 5)
+
     def __init__(self, node, pos, visual_scheme, parent=None):
         super().__init__(parent)
         # Keep reference to node
-        self.visual_scheme = visual_scheme
         self.node = node
 
         # set node config
-        self.node_label, self.pen, self.brush, self.size = None, None, None, None
-        self.setNodeConfig()
+        self.node_label, self.pen = None, None
+        self.brush, self.size = None, None
+        self.setNodeConfig(visual_scheme)
 
-        # set node shell
         self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
-        self.shell.setBrush(self.brush)
-        self.shell.setPen(self.pen)
-        self.shell.setEnabled(False)
         self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.shell.setPen(self.pen)
+        self.shell.setBrush(self.brush)
+
+        self.background = VisualNode.Background(self.brush, self.pen, parent=self)
+        self.background.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.background.setEnabled(False)
 
         # set text
         self.text = QGraphicsTextItem(self.label_text, parent=self)
@@ -603,37 +667,26 @@ class VisualNode(QGraphicsItem):
         self.text.setEnabled(False)
         self.text.setDefaultTextColor(Qt.white)
 
+        # set node shell
+        self.background.setBoundingRect(self.boundingRect())
         super().setPos(pos - self.boundingRect().center())
 
-    def setNodeConfig(self):
-        ntype = type(self.node).__name__
-        default_config = self.visual_scheme['nodes'].get('default', {})
-        config = self.visual_scheme['nodes'].get(ntype, default_config)
-
+    def setNodeConfig(self, config):
         # Pen
-        self.pen = QPen(Qt.black, int(config.get("boundarySize", 0)))
+        self.pen = QPen(Qt.black, int(config.get("boundarySize", 2)))
         
         # Brush
         color = config.get("fillColor", 'darkGray')
         self.brush = QBrush(getattr(Qt, color))
 
         # Size
-        size = config.get('size', [20,20])
+        size = config.get('size', [50,50])
         if not isinstance(size, list):
             size = [size, size]
         self.size = [int(s) for s in size]
 
         # Node Label
-        label_attr = config.get('label_attr', None) 
-        if label_attr:
-            attr = getattr(self.node, label_attr)
-            if callable(attr):
-                txt = attr()
-            else:
-                txt = attr
-        else:
-            txt = type(self.node).__name__
-        self.label_text = txt
+        self.label_text = config.get('label', type(self.node).__name__) 
 
     def get_properties(self):
         if hasattr(self.node, 'get_config'):
@@ -645,6 +698,10 @@ class VisualNode(QGraphicsItem):
 
     def paint(self, painter, option, widget=None):
         pass
+        #painter.setBrush(self.brush)
+        #painter.drawRoundedRect(self.boundingRect(), 5, 5)
+        #super().paint(painter, option, widget=None)
+        #pass
 
     def boundingRect(self):
         return self.childrenBoundingRect() 
