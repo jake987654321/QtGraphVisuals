@@ -3,12 +3,12 @@ import sys, json, pathlib
 import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
-        QRect, QRectF)
+        QRect, QRectF) 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
-        QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsRectItem,
-        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGraphicsLineItem, QGroupBox,
+        QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsPolygonItem, QGraphicsRectItem,
+        QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGraphicsPathItem, QGraphicsLineItem, QGroupBox,
         QScrollArea, QFrame, QTabWidget, QSplitter)
-from PySide6.QtGui import QPainter, QTransform, QBrush, QPen, QColor
+from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF
 
 # Load default visual schemes 
 default_visual_schemes = {}
@@ -535,6 +535,71 @@ class VisualGraph(QGraphicsItem):
         self._bounding_rect = self.childrenBoundingRect()
 
 class VisualEdge(QGraphicsItem):
+    class ArrowHead(QGraphicsItem):
+        def __init__(self, parent=None):
+            super().__init__(parent=parent)
+            line = QLineF(QPointF(-3,0), QPointF(3,0))
+            line.setAngle(30)
+            self.arrow_up = QGraphicsLineItem (line, parent=self)
+            self.arrow_up.setPen(QPen(Qt.white))
+
+            line = QLineF(QPointF(-3,0), QPointF(3,0))
+            line.setAngle(-30)
+            self.arrow_down = QGraphicsLineItem (line, parent=self)
+            self.arrow_down.setPen(QPen(Qt.white))
+
+            self.arrow_up.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+            self.arrow_down.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+
+        def setHovering(self, state):
+            if state:
+                self.parentItem().path.setPen(QPen(Qt.red))
+                self.parentItem().text.setVisible(True)
+                self.setPen(QPen(Qt.red))
+            else:
+                self.parentItem().path.setPen(QPen(Qt.white))
+                self.parentItem().text.setVisible(False)
+                self.setPen(QPen(Qt.white))
+            self.parentItem().update()
+
+        def setPen(self, pen):
+            self.arrow_up.setPen(pen)
+            self.arrow_down.setPen(pen)
+
+        def paint(self, painter, option, widget=None):
+            pass
+
+        def boundingRect(self):
+            return self.childrenBoundingRect()
+
+    class Arc(QGraphicsItem):
+        def __init__(self, parent=None):
+            super().__init__(parent=parent)
+            self.rect = QRectF()
+            self.pen = QPen()
+            self.orientation = True
+
+        def setOrientation(self, ori):
+            self.orientation = ori
+
+        def setRect(self, rect):
+            self.rect = rect
+
+        def setPen(self, pen):
+            self.pen = pen 
+
+        def paint(self, painter, option, widget=None):
+            painter.setPen(self.pen)
+            if self.orientation:
+                start, span = 0, 180*16
+            else:
+                start, span = 0, -180*16
+            painter.drawArc(self.rect, start, span)
+
+        def boundingRect(self):
+            return self.rect
+
+
     def __init__(self, edge, parent=None):
         super().__init__(parent=parent)
 
@@ -545,82 +610,102 @@ class VisualEdge(QGraphicsItem):
         self.out_vnode = self.parentItem()._node_to_vnode_map[self.out_node]
 
         # Create the graphics items
-        self.path = QGraphicsLineItem(parent=self)
-        self.arrow_left = QGraphicsLineItem(parent=self)
-        self.arrow_right = QGraphicsLineItem(parent=self)
+        self.path = VisualEdge.Arc(parent=self)
+        self.arrow = VisualEdge.ArrowHead(parent=self)
         self.text = QGraphicsTextItem(str(self.data), parent=self)#str(self.data))
 
         self.path.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
-        self.arrow_left.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
-        self.arrow_right.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        #self.arrow.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         self.text.setVisible(False)
 
         # Colorize
         self.path.setPen(QPen(Qt.white))
-        self.arrow_left.setPen(QPen(Qt.white))
-        self.arrow_right.setPen(QPen(Qt.white))
+        self.arrow.setPen(QPen(Qt.white))
         self.text.setDefaultTextColor(Qt.lightGray)
 
         # Calculate graphic items positions
         self.setZValue(-1)
         self.calculatePath()
-        self.calculateArrowHead()
         self.calculateText()
 
+    def lineIntersects(self, line):
+        def orientation(p1,p2,p3): 
+            val = (float(p2.y() - p1.y()) * (p3.x() - p2.x())) - (float(p2.x() - p1.x()) * (p3.y() - p2.y()))
+            return val > 0
+
+        path = QPainterPath(line.p1())
+        path.lineTo(line.p2())
+        for vnode in self.parentItem()._node_to_vnode_map.values():
+            if vnode is self.in_vnode or vnode is self.out_vnode:
+                continue
+            shape = vnode.mapToScene(vnode.shape())
+            if shape.intersects(path):
+                return True, orientation(self.in_vnode.center(), self.out_vnode.center(), vnode.center())
+        return False, False
+
     def calculatePath(self):
+
+        # If a straight path intersects other nodes, make the line arc instead
+        line = QLineF(self.out_vnode.center(), self.in_vnode.center())
+        intersected, orientation = self.lineIntersects(line)
+        if intersected: 
+            h = 80 if orientation else -80
+        else:
+            h = 1
+
+        rect = QRectF(QPointF(0,h/2), QPointF(line.length(), -h/2))
+        self.path.setOrientation(orientation)
+        self.path.setRect(rect)
+        self.path.setRotation(-line.angle())
+
+        pos = line.p1()
+
+        # For multi-edge nodes draw an offset on the edge so its more visible
         delta = 0
         if isinstance(self.key, int):
             if self.key != 0:
                 delta = 8 if self.key % 2 else -8
-
-        line = QLineF(self.out_vnode.center(), self.in_vnode.center())
         if delta:
             offset = (line.normalVector().unitVector().p2() - line.p1()) * delta
-            line.translate(offset)
-        self.path.setLine(line)
+            pos = offset + line.p1()
+        else:
+            offset = QPointF(0,0)
+        self.path.setPos(pos)
 
-    def calculateArrowHead(self):
-        c = self.path.line().center()
-        u = self.path.line().unitVector().p1() - self.path.line().unitVector().p2()
-        angle = self.path.line().angle()
+        curve_offset = (line.normalVector().unitVector().p2() - line.p1()) * h/2
+        self.arrow.setRotation(-line.angle())
+        self.arrow.setPos(line.center() + curve_offset + offset)
 
-        # Arrow head
-        arrow_right = QLineF(c+3*u, c-3*u)
-        arrow_right.setAngle(angle+30)
-
-        arrow_left = QLineF(c+3*u, c-3*u)
-        arrow_left.setAngle(angle-30)
-
-        self.arrow_left.setLine(arrow_left)
-        self.arrow_right.setLine(arrow_right)
+    def getLine(self):
+        return QLineF(self.out_vnode.center(), self.in_vnode.center())
 
     def calculateText(self):
-        self.text.setPos(self.path.line().center())
+        self.text.setPos(self.getLine().center())
 
     def updatePath(self):
+        self.prepareGeometryChange()
         self.calculatePath()
-        self.calculateArrowHead()
         self.calculateText()
-
-    def setHovering(self, state):
-        if state:
-            self.path.setPen(QPen(Qt.red))
-            self.arrow_left.setPen(QPen(Qt.red))
-            self.arrow_right.setPen(QPen(Qt.red))
-            self.text.setVisible(True)
-        else:
-            self.path.setPen(QPen(Qt.white))
-            self.arrow_left.setPen(QPen(Qt.white))
-            self.arrow_right.setPen(QPen(Qt.white))
-            self.text.setVisible(False)
         self.update()
+
+    #def setHovering(self, state):
+    #    if state:
+    #        self.path.setPen(QPen(Qt.red))
+    #        self.arrow.setPen(QPen(Qt.red))
+    #        self.text.setVisible(True)
+    #    else:
+    #        self.path.setPen(QPen(Qt.white))
+    #        self.arrow.setPen(QPen(Qt.white))
+    #        self.text.setVisible(False)
+    #    self.update()
 
     def paint(self, painter, option, widget=None):
         pass
+        #painter.drawRect(self.boundingRect())
 
     def boundingRect(self):
-        return QRectF(self.arrow_left.boundingRect()).united(self.arrow_right.boundingRect())
+        return self.childrenBoundingRect()
 
 class VisualNode(QGraphicsItem):
     class Background(QGraphicsItem):
@@ -637,9 +722,8 @@ class VisualNode(QGraphicsItem):
             return self._boundary
 
         def paint(self, painter, option, widget=None):
-            pass
-            #painter.setBrush(self.brush)
-            #painter.drawRoundedRect(self.boundingRect(), 5, 5)
+            painter.setBrush(self.brush)
+            painter.drawRoundedRect(self.boundingRect(), 5, 5)
 
     def __init__(self, node, pos, visual_scheme, parent=None):
         super().__init__(parent)
@@ -652,23 +736,24 @@ class VisualNode(QGraphicsItem):
         self.setNodeConfig(visual_scheme)
 
         self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
-        self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         self.shell.setPen(self.pen)
         self.shell.setBrush(self.brush)
+        self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        self.shell.setEnabled(False)
 
-        self.background = VisualNode.Background(self.brush, self.pen, parent=self)
-        self.background.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
-        self.background.setEnabled(False)
+        #self.background = VisualNode.Background(self.brush, self.pen, parent=self)
+        #self.background.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
+        #self.background.setEnabled(False)
 
         # set text
         self.text = QGraphicsTextItem(self.label_text, parent=self)
         self.text.setPos(self.shell.boundingRect().center() - self.text.boundingRect().center())
+        self.text.setDefaultTextColor(Qt.white)
         self.text.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         self.text.setEnabled(False)
-        self.text.setDefaultTextColor(Qt.white)
 
         # set node shell
-        self.background.setBoundingRect(self.boundingRect())
+        #self.background.setBoundingRect(self.boundingRect())
         super().setPos(pos - self.boundingRect().center())
 
     def setNodeConfig(self, config):
