@@ -652,7 +652,7 @@ class VisualEdge(QGraphicsItem):
         if intersected: 
             h = 80 if orientation else -80
         else:
-            h = 1
+            h = 0
 
         rect = QRectF(QPointF(0,h/2), QPointF(line.length(), -h/2))
         self.path.setOrientation(orientation)
