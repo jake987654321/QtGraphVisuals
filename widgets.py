@@ -1,5 +1,5 @@
 
-import sys, json, pathlib
+import sys, pathlib
 import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
@@ -10,11 +10,144 @@ from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout, QPush
         QScrollArea, QFrame, QTabWidget, QSplitter)
 from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF, QFont
 
-# Load default visual schemes 
-default_visual_schemes = {}
-path = pathlib.Path(__file__).parent
-with open(path / 'default_visual_schemes.json', 'r') as f:
-    default_visual_schemes = json.loads(f.read())
+def onnxToMultiDiGraph(model):
+    import onnx 
+    def setVisualScheme(graph):
+        # Set Visual Schemes
+        for node_name,data in graph.nodes(data=True):
+            node = data['node']
+            vs = {'boundaySize': 2, 'size': 50, 'label':node_name}
+            if isinstance(node, onnx.ValueInfoProto):
+                graph.nodes[node_name]['visual_scheme'] = vs
+                continue
+
+            vs['label'] = node.op_type.lower()
+            if 'conv' in node.op_type.lower():
+                vs['fillColor'] = 'darkBlue'
+            elif 'pool' in node.op_type.lower():
+                vs['fillColor'] = 'darkgraphreen'
+            elif 'elu' in node.op_type.lower():
+                vs['fillColor'] = 'darkRed'
+                vs['size'] = [50,25]
+            graph.nodes[node_name]['visual_scheme'] = vs
+
+            graph.nodes[node_name]['properties'] = {}
+            graph.nodes[node_name]['properties']['name'] = node_name
+            graph.nodes[node_name]['properties']['inbound'] = list(graph.predecessors(node_name))
+            graph.nodes[node_name]['properties']['outbound'] = list(graph.successors(node_name))
+            graph.nodes[node_name]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.attribute)})
+
+        for u,v,key,data in graph.edges(keys=True, data=True):
+            txt = onnx.helper.printable_value_info(data['value'])
+            graph.edges[u,v,key]['properties'] = {'info': txt}
+
+    # Initialize a NetworkX MultiDiGraph
+    graph = nx.MultiDiGraph(name=model.graph.name)
+
+    # Add nodes to the graph
+    for node in model.graph.node:
+        graph.add_node(node.name, node=node)
+
+    # Add initializer data to the nodes
+    for init in model.graph.initializer:
+        for node in model.graph.node:
+            if init.name in node.input:
+                graph.nodes[node.name][init.name] = init
+    
+    # Add edges to the graph
+    for value in model.graph.value_info:
+        u, v = None, None 
+        in_index, out_index = 0, 0
+        for node in model.graph.node :
+            if value.name in node.output:
+                u = node.name
+                out_index = list(node.output).index(value.name)
+            if value.name in node.input:
+                v = node.name
+                in_index = list(node.input).index(value.name)
+        if u and v:
+            graph.add_edge(u, v, in_index=in_index, out_index=out_index, value=value)
+
+    # Add input / output nodes (and edges) to the graph
+    for inout in list(model.graph.input) + list(model.graph.output):
+        for node in model.graph.node:
+
+            # Add output node
+            if inout.name in node.output:
+                index = list(node.output).index(inout.name)
+                graph.add_node(inout.name, node=inout)
+                graph.add_edge(node.name, inout.name, in_index=index, out_index=0, value=inout)
+                break
+
+            # Add input node
+            if inout.name in node.input:
+                index = list(node.input).index(inout.name)
+                graph.add_node(inout.name, node=inout)
+                graph.add_edge(inout.name, node.name, in_index=0, out_index=index, value=inout)
+                break
+
+    # Adds auxillary information to the graph for visualization purposes
+    setVisualScheme(graph)
+    return graph
+
+def kerasToMultiDiGraph(model):
+    def setVisualScheme(graph):
+        # Set Visual Schemes
+        for node in graph.nodes():
+            ntype = type(node).__name__
+            vs = {'boundaySize': 2, 'size': 50, 'label': ntype}
+
+            if 'conv' in ntype.lower():
+                vs['fillColor'] = 'darkBlue'
+            elif 'pool' in ntype.lower():
+                vs['fillColor'] = 'darkGreen'
+            elif 'elu' in ntype.lower() or 'activation' in ntype.lower():
+                vs['fillColor'] = 'darkRed'
+                vs['size'] = [50,25]
+            elif 'normalization' in ntype.lower():
+                vs['fillColor'] = 'darkMagenta'
+                vs['size'] = [50,25]
+            elif graph.in_degree(node) > 1:
+                vs['fillColor'] = 'black'
+                vs['size'] = [50,25]
+
+            graph.nodes[node]['visual_scheme'] = vs
+            graph.nodes[node]['properties'] = {}
+            graph.nodes[node]['properties']['name'] = node
+            graph.nodes[node]['properties']['inbound'] = list([n.name for n in graph.predecessors(node)])
+            graph.nodes[node]['properties']['outbound'] = list([n.name for n in graph.successors(node)])
+            graph.nodes[node]['properties'].update(node.get_config())
+
+        for u,v,key,data in graph.edges(keys=True, data=True):
+            graph.edges[u,v,key]['properties'] = {'shape': v.output_shape}
+
+    graph = nx.MultiDiGraph()
+
+    # Add all 'Layers' (aka nodes) to the graph
+    graph.add_nodes_from(model.layers)
+
+    # Get a set of all 'Nodes' (aka edges) in the keras graph
+    keras_nodes = []
+    for layer in model.layers:
+        for node in layer.outbound_nodes:
+            keras_nodes.append(node)
+    keras_nodes = set(keras_nodes)
+
+    # Add the edges to the graph
+    for kn in keras_nodes:
+        input_layers = kn.inbound_layers
+        if not isinstance(input_layers, list): 
+            input_layers = [input_layers]
+        output_layer = kn.outbound_layer
+
+        for index, input_layer in enumerate(input_layers):
+            shape = input_layer.output_shape
+            graph.add_edge(input_layer, output_layer,
+                        in_index=0, out_index=index, shape=shape)
+
+    # Adds auxillary information to the graph for visualization purposes
+    setVisualScheme(graph)
+    return graph
 
 ## Application
 class GraphViewer(QWidget):
@@ -24,7 +157,7 @@ class GraphViewer(QWidget):
         # Children
         self._tabs = QTabWidget(parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
-        self._controls = ControlButtons(parent=self)
+        #self._controls = ControlButtons(parent=self)
 
         # Create views
         self._views = {}
@@ -35,7 +168,7 @@ class GraphViewer(QWidget):
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties_viewer)
-        self.layout().addWidget(self._controls)
+        #self.layout().addWidget(self._controls)
         self.layout().addWidget(self._splitter)
 
         # Connect
@@ -59,10 +192,10 @@ class GraphViewer(QWidget):
         self._tabs.removeTab(self._tabs.indexOf(gv))
         gv.deleteLater()
 
-    def addView(self, view_name, graph, visual_scheme=None):
+    def addView(self, view_name, graph):
         if view_name in self._views:
             raise ValueError(f"{view_name} already exsists")
-        gv = GraphViewerWindow(graph, visual_scheme, parent=self)
+        gv = GraphViewerWindow(graph, parent=self)
         self._views[view_name] = gv
         gv.clicked.connect(self._properties_viewer.setConfig)
         self._tabs.addTab(gv, view_name)
@@ -179,13 +312,12 @@ class ControlButtons(QWidget):
         self.layout().addWidget(self.button1)
         self.layout().addWidget(self.button2)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
-        
 
 # Graph Viewer
 class GraphViewerWindow(QGraphicsView):
     clicked = Signal(tuple)
 
-    def __init__(self, graph=None, visual_scheme=None, parent=None):
+    def __init__(self, graph=None, parent=None):
         super().__init__(parent)
         self._graph = graph
 
@@ -201,7 +333,7 @@ class GraphViewerWindow(QGraphicsView):
         self.setScene(self._scene)
 
         self._vgraph = None
-        self.setGraph(self._graph, visual_scheme)
+        self.setGraph(self._graph)
 
         # Set scene bounding rect
         self.setSceneRect()
@@ -238,7 +370,7 @@ class GraphViewerWindow(QGraphicsView):
             self._dragging = False
             self.setCursor(Qt.ArrowCursor)
             if self._selected:
-                self.clicked.emit(self._selected.get_properties())
+                self.clicked.emit(self._selected.getProperties())
                 #self.scene().setSceneRect(self.scene().itemsBoundingRect())
         super().mouseReleaseEvent(e)
 
@@ -299,24 +431,18 @@ class GraphViewerWindow(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
-    def setGraph(self, graph, visual_scheme=None):
+    def setGraph(self, graph):
         self.scene().clear()
         
-        # Convert graph (if not already a DiGraph) and set visual scheme (if not specified)
+        # Convert graph (if not already a MultiDiGraph)
         if isinstance(graph, nx.MultiDiGraph):
             self._graph = graph
-            if visual_scheme is None:
-                visual_scheme = default_visual_schemes['default']
         elif 'keras' in graph.__module__:
-            self._graph = self.kerasToMultiDiGraph(graph)
-            if visual_scheme is None:
-                visual_scheme = default_visual_schemes['keras']
+            self._graph = kerasToMultiDiGraph(graph)
         elif 'onnx' in graph.__module__:
-            self._graph = self.onnxToMultiDiGraph(graph)
-            if visual_scheme is None:
-                visual_scheme = default_visual_schemes['default']
+            self._graph = onnxToMultiDiGraph(graph)
 
-        self._vgraph = VisualGraph(self._graph, visual_scheme=visual_scheme)
+        self._vgraph = VisualGraph(self._graph)
         self.scene().addItem(self._vgraph)
         self.setSceneRect()
 
@@ -324,128 +450,11 @@ class GraphViewerWindow(QGraphicsView):
         self._dragging = False
         self._selected = None
 
-    def onnxToMultiDiGraph(self, model):
-        import onnx 
-
-        # Initialize a NetworkX MultiDiGraph
-        G = nx.MultiDiGraph(name=model.graph.name)
-
-        # Add nodes to the graph
-        for node in model.graph.node:
-            G.add_node(node.name, node=node)
-
-        # Add initializer data to the nodes
-        for init in model.graph.initializer:
-            for node in model.graph.node:
-                if init.name in node.input:
-                    G.nodes[node.name][init.name] = init
-        
-        # Add edges to the graph
-        for value in model.graph.value_info:
-            u, v = None, None 
-            in_index, out_index = 0, 0
-            for node in model.graph.node :
-                if value.name in node.output:
-                    u = node.name
-                    out_index = list(node.output).index(value.name)
-                if value.name in node.input:
-                    v = node.name
-                    in_index = list(node.input).index(value.name)
-            if u and v:
-                G.add_edge(u, v, in_index=in_index, out_index=out_index, value=value)
-
-        # Add input / output nodes (and edges) to the graph
-        for inout in list(model.graph.input) + list(model.graph.output):
-            for node in model.graph.node:
-
-                # Add output node
-                if inout.name in node.output:
-                    index = list(node.output).index(inout.name)
-                    G.add_node(inout.name, node=inout)
-                    G.add_edge(node.name, inout.name, in_index=index, out_index=0)
-                    break
-
-                # Add input node
-                if inout.name in node.input:
-                    index = list(node.input).index(inout.name)
-                    G.add_node(inout.name, node=inout)
-                    G.add_edge(inout.name, node.name, in_index=0, out_index=index)
-                    break
-
-        # Set Visual Schemes
-        for node_name,data in G.nodes(data=True):
-            node = data['node']
-            vs = {'boundaySize': 2, 'size': 50, 'label':node_name}
-            if isinstance(node, onnx.ValueInfoProto):
-                G.nodes[node_name]['visual_scheme'] = vs
-                continue
-
-            vs['label'] = node.op_type.lower()
-            if 'conv' in node.op_type.lower():
-                vs['fillColor'] = 'darkBlue'
-            elif 'pool' in node.op_type.lower():
-                vs['fillColor'] = 'darkGreen'
-            elif 'elu' in node.op_type.lower():
-                vs['fillColor'] = 'darkRed'
-                vs['size'] = [50,25]
-            G.nodes[node_name]['visual_scheme'] = vs
-
-        return G
-
-    def kerasToMultiDiGraph(self, model):
-        graph = nx.MultiDiGraph()
-
-        # Add all 'Layers' (aka nodes) to the graph
-        graph.add_nodes_from(model.layers)
-
-        # Get a set of all 'Nodes' (aka edges) in the keras graph
-        keras_nodes = []
-        for layer in model.layers:
-            for node in layer.outbound_nodes:
-                keras_nodes.append(node)
-        keras_nodes = set(keras_nodes)
-
-        # Add the edges to the graph
-        for kn in keras_nodes:
-            input_layers = kn.inbound_layers
-            if not isinstance(input_layers, list): 
-                input_layers = [input_layers]
-            output_layer = kn.outbound_layer
-
-            for index, input_layer in enumerate(input_layers):
-                shape = input_layer.output_shape
-                graph.add_edge(input_layer, output_layer,
-                            in_index=0, out_index=index, shape=shape)
-
-        # Set Visual Schemes
-        for node in graph.nodes():
-            ntype = type(node).__name__
-            vs = {'boundaySize': 2, 'size': 50, 'label': ntype}
-
-            if 'conv' in ntype.lower():
-                vs['fillColor'] = 'darkBlue'
-            elif 'pool' in ntype.lower():
-                vs['fillColor'] = 'darkGreen'
-            elif 'elu' in ntype.lower() or 'activation' in ntype.lower():
-                vs['fillColor'] = 'darkRed'
-                vs['size'] = [50,25]
-            elif 'normalization' in ntype.lower():
-                vs['fillColor'] = 'darkMagenta'
-                vs['size'] = [50,25]
-            elif graph.in_degree(node) > 1:
-                vs['fillColor'] = 'black'
-                vs['size'] = [50,25]
-
-            graph.nodes[node]['visual_scheme'] = vs
-
-        return graph
-
 class VisualGraph(QGraphicsItem):
-    def __init__(self, graph=None, visual_scheme=None, parent=None):
+    def __init__(self, graph=None, horizontal=False, parent=None):
         super().__init__(parent=parent)
 
         # Drawing Config
-        self.visual_scheme = visual_scheme
         self.node_size = 75
         self.y_spacing = 1.25*self.node_size
         self.x_spacing = 1.25*self.node_size
@@ -499,9 +508,12 @@ class VisualGraph(QGraphicsItem):
 
         return positions
 
-    def create_visual_nodes(self, positions):
+    def create_visual_nodes(self, positions, horizontal=False):
         for node,pos in positions.items():
-            l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
+            if horizontal:
+                l,t = pos[1]-self.node_size/2, pos[0]-self.node_size/2
+            else:
+                l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
 
             visual_scheme = self._graph.nodes[node].get('visual_scheme', {})
             self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
@@ -570,10 +582,10 @@ class VisualGraph(QGraphicsItem):
         for u,v,idx in self._graph.out_edges(node, keys=True):
             self._edge_to_vedge_map[(u,v,idx)].updatePath()
 
-    def setGraph(self, graph):
+    def setGraph(self, graph, horizontal=False):
         self._graph = nx.MultiDiGraph(graph)
         positions = self.calculate_positions()
-        self.create_visual_nodes(positions)
+        self.create_visual_nodes(positions, horizontal)
         self.create_visual_edges()
         self._bounding_rect = self.childrenBoundingRect()
 
@@ -647,6 +659,7 @@ class VisualEdge(QGraphicsItem):
         super().__init__(parent=parent)
 
         # Unpack the edge
+        self.graph = self.parentItem()._graph
         self.edge = edge
         self.in_node, self.out_node, self.key, self.data = edge
         self.in_vnode = self.parentItem()._node_to_vnode_map[self.in_node]
@@ -656,6 +669,7 @@ class VisualEdge(QGraphicsItem):
         self.path = VisualEdge.Arc(parent=self)
         self.arrow = VisualEdge.ArrowHead(parent=self)
         self.text = QGraphicsTextItem(str(self.data), parent=self)#str(self.data))
+        self.setEdgeText()
 
         self.path.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
         #self.arrow.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
@@ -671,6 +685,14 @@ class VisualEdge(QGraphicsItem):
         self.setZValue(-1)
         self.calculatePath()
         self.calculateText()
+
+    def setEdgeText(self):
+        properties = self.data.get('properties', {})
+        if properties:
+            txt = "\n".join([f"{k}: {v}" for k,v in properties.items()])
+        else:
+            txt = ""
+        self.text.setPlainText(txt)
 
     def lineIntersects(self, line):
         def orientation(p1,p2,p3): 
@@ -771,12 +793,13 @@ class VisualNode(QGraphicsItem):
     def __init__(self, node, pos, visual_scheme, parent=None):
         super().__init__(parent)
         # Keep reference to node
+        self.graph = self.parentItem()._graph
         self.node = node
 
         # set node config
         self.node_label, self.pen = None, None
         self.brush, self.size = None, None
-        self.setNodeConfig(visual_scheme)
+        self.setVisualScheme()
 
         self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
         self.shell.setPen(self.pen)
@@ -799,7 +822,9 @@ class VisualNode(QGraphicsItem):
         #self.background.setBoundingRect(self.boundingRect())
         super().setPos(pos - self.boundingRect().center())
 
-    def setNodeConfig(self, config):
+    def setVisualScheme(self):
+        config = self.graph.nodes[self.node].get('visual_scheme', {})
+
         # Pen
         self.pen = QPen(Qt.black, int(config.get("boundarySize", 2)))
         
@@ -816,13 +841,9 @@ class VisualNode(QGraphicsItem):
         # Node Label
         self.label_text = config.get('label', type(self.node).__name__) 
 
-    def get_properties(self):
-        if hasattr(self.node, 'get_config'):
-            return self.node.get_config()
-        elif hasattr(self.node, '__dict__'):
-            return self.node.__dict__
-        else:
-            return {'type': type(self.node).__name__, 'name': self.node}
+    def getProperties(self):
+        defaults = {'type': type(self.node).__name__, 'name': self.node}
+        return self.graph.nodes[self.node].get('properties', defaults) 
 
     def paint(self, painter, option, widget=None):
         pass
