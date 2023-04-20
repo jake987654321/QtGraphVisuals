@@ -4,11 +4,11 @@ import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
         QRect, QRectF) 
-from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout, QPushButton, QSizePolicy,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsPolygonItem, QGraphicsRectItem,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGraphicsPathItem, QGraphicsLineItem, QGroupBox,
         QScrollArea, QFrame, QTabWidget, QSplitter)
-from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF
+from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF, QFont
 
 # Load default visual schemes 
 default_visual_schemes = {}
@@ -24,16 +24,18 @@ class GraphViewer(QWidget):
         # Children
         self._tabs = QTabWidget(parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
+        self._controls = ControlButtons(parent=self)
 
         # Create views
         self._views = {}
         [self.addView(name, graph) for name,graph in views.items()]
 
         # Layout
-        self.setLayout(QVBoxLayout())
+        self.setLayout(QHBoxLayout())
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties_viewer)
+        self.layout().addWidget(self._controls)
         self.layout().addWidget(self._splitter)
 
         # Connect
@@ -137,6 +139,47 @@ class PropertyViewerTextBox(QWidget):
     def set(self, name, value):
         self._name.setText(f"{name}")
         self._value.setText(f"{value}")
+
+class ControlButtons(QWidget):
+    class SwitchButton(QWidget):
+        def __init__(self, states, parent=None):
+            super().__init__(parent)
+            self.states = states
+            self.state_idx = 0
+
+            self.button = QPushButton(self.states[self.state_idx], parent=self) 
+            self.button.setFont(QFont(self.button.font().family(), 24))
+            self.button.setFixedWidth(self.button.height()+2)
+            self.button.setStyleSheet("QPushButton {padding: 0px; border-width: 0px;}")
+            self.button.clicked.connect(self.click)
+
+            self.setLayout(QVBoxLayout())
+            self.layout().addWidget(self.button)
+            self.layout().setContentsMargins(0,0,0,0)
+
+        @Slot()
+        def click(self, e):
+            print('Click')
+            self.state_idx += 1
+            if self.state_idx >= len(self.states):
+                self.state_idx = 0
+            self.button.setText(self.states[self.state_idx])
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        #self.frame = QFrame(self)
+        #self.frame.setLayout(QVBoxLayout())
+
+        self.setLayout(QVBoxLayout())
+        self.layout().setAlignment(Qt.AlignTop)
+
+        self.button1 = ControlButtons.SwitchButton(list("➡⬇"), parent=self)
+        self.button2 = ControlButtons.SwitchButton(list("◼⚫"), parent=self)
+
+        self.layout().addWidget(self.button1)
+        self.layout().addWidget(self.button2)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
+        
 
 # Graph Viewer
 class GraphViewerWindow(QGraphicsView):
