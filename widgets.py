@@ -341,7 +341,8 @@ class GraphViewerWindow(QGraphicsView):
         # State
         self._dragging = False
         self._selected = None
-        self._hovering = None
+        self._selection_box = None
+        self._hovering = []
 
         # Center the Scene
         self.centerScene()
@@ -375,24 +376,22 @@ class GraphViewerWindow(QGraphicsView):
         super().mouseReleaseEvent(e)
 
     def _checkHovering(self, e):
-        item = self.itemAt(e.position().toPoint())
-        if not item and not self._hovering:
-            pass
-        elif item and not self._hovering:
-            if hasattr(item, 'setHovering'):
+        #item = self.itemAt(e.position().toPoint())
+        items = self.items(e.position().toPoint()) 
+
+        #i first unset all items no longer being hovered
+        to_be_removed = []
+        for hover in self._hovering:
+            if hasattr(hover, 'setHovering') and hover not in items:
+                hover.setHovering(False)
+                to_be_removed.append(hover)
+        [self._hovering.remove(r) for r in to_be_removed]
+
+        # second set hovering for all items 
+        for item in items:
+            if hasattr(item, 'setHovering') and item not in self._hovering:
                 item.setHovering(True)
-            self._hovering = item
-        elif not item and self._hovering:
-            if hasattr(self._hovering, 'setHovering'):
-                self._hovering.setHovering(False)
-            self._hovering = None 
-        else: # item and self._hovering
-            if not item is self._hovering:
-                if hasattr(self._hovering, 'setHovering'):
-                    self._hovering.setHovering(False)
-                if hasattr(item, 'setHovering'):
-                    item.setHovering(True)
-                self._hovering = item
+                self._hovering.append(item)
 
     def mouseMoveEvent(self, e):
         self._checkHovering(e)
