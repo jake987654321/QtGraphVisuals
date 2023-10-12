@@ -36,6 +36,7 @@ def onnxToMultiDiGraph(model):
             graph.nodes[node_name]['properties']['inbound'] = list(graph.predecessors(node_name))
             graph.nodes[node_name]['properties']['outbound'] = list(graph.successors(node_name))
             graph.nodes[node_name]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.attribute)})
+            graph.nodes[node_name]['properties']['initializer'] = list(data['initializer'].keys())
 
         for u,v,key,data in graph.edges(keys=True, data=True):
             txt = onnx.helper.printable_value_info(data['value'])
@@ -46,27 +47,27 @@ def onnxToMultiDiGraph(model):
 
     # Add nodes to the graph
     for node in model.graph.node:
-        graph.add_node(node.name, node=node)
+        graph.add_node(node.name, node=node, initializer={})
 
     # Add initializer data to the nodes
     for init in model.graph.initializer:
         for node in model.graph.node:
             if init.name in node.input:
-                graph.nodes[node.name][init.name] = init
+                graph.nodes[node.name]['initializer'][init.name] = init
     
     # Add edges to the graph
-    for value in model.graph.value_info:
-        u, v = None, None 
-        in_index, out_index = 0, 0
-        for node in model.graph.node :
-            if value.name in node.output:
-                u = node.name
-                out_index = list(node.output).index(value.name)
-            if value.name in node.input:
-                v = node.name
-                in_index = list(node.input).index(value.name)
-        if u and v:
-            graph.add_edge(u, v, in_index=in_index, out_index=out_index, value=value)
+    name_to_value_map = {v.name:v for v in model.graph.value_info}
+    for u in model.graph.node:
+        for v in model.graph.node:
+            if v is u:
+                continue
+            for out_index, value_name in enumerate(u.output):
+                if not value_name in v.input:
+                    continue
+                in_index = list(v.input).index(value_name)
+                value = name_to_value_map[value_name]
+                graph.add_edge(u.name, v.name, in_index=in_index,
+                    out_index=out_index, value=value)
 
     # Add input / output nodes (and edges) to the graph
     for inout in list(model.graph.input) + list(model.graph.output):
@@ -127,23 +128,16 @@ def kerasToMultiDiGraph(model):
     graph.add_nodes_from(model.layers)
 
     # Get a set of all 'Nodes' (aka edges) in the keras graph
-    keras_nodes = []
-    for layer in model.layers:
-        for node in layer.outbound_nodes:
-            keras_nodes.append(node)
-    keras_nodes = set(keras_nodes)
-
-    # Add the edges to the graph
-    for kn in keras_nodes:
-        input_layers = kn.inbound_layers
-        if not isinstance(input_layers, list): 
-            input_layers = [input_layers]
-        output_layer = kn.outbound_layer
-
-        for index, input_layer in enumerate(input_layers):
-            shape = input_layer.output_shape
-            graph.add_edge(input_layer, output_layer,
-                        in_index=0, out_index=index, shape=shape)
+    for u in model.layers:
+        for v in model.layers:
+            if u is v:
+                continue
+            for node in u.outbound_nodes:
+                if node in v.inbound_nodes:
+                    index = v.inbound_nodes.index(node)
+                    shape = u.output_shape
+                    graph.add_edge(u, v, in_index=0, out_index=index,
+                        shape=shape)
 
     # Adds auxillary information to the graph for visualization purposes
     setVisualScheme(graph)
@@ -681,7 +675,7 @@ class VisualEdge(QGraphicsItem):
         self.text.setDefaultTextColor(Qt.lightGray)
 
         # Calculate graphic items positions
-        self.setZValue(-1)
+        self.setZValue(-2)
         self.calculatePath()
         self.calculateText()
 
@@ -838,7 +832,7 @@ class VisualNode(QGraphicsItem):
         self.size = [int(s) for s in size]
 
         # Node Label
-        self.label_text = config.get('label', type(self.node).__name__) 
+        self.label_text = config.get('label', repr(self.node)) 
 
     def getProperties(self):
         defaults = {'type': type(self.node).__name__, 'name': self.node}
