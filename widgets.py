@@ -86,7 +86,9 @@ def onnxToMultiDiGraph(model):
 
         for u,v,key,data in graph.edges(keys=True, data=True):
             try:
-                txt = onnx.helper.printable_value_info(data.get('value', 0))
+                #txt = onnx.helper.printable_value_info(data.get('value', 0))
+                value_info_proto = data['value']
+                txt = onnx.helper.printable_type(value_info_proto.type)
             except:
                 txt = ''
             graph.edges[u,v,key]['properties'] = {'info': txt}
@@ -444,6 +446,33 @@ class ControlRibbon(QWidget):
             self.gvw.centerScene()
             self.gvw.setDefaultZoom()
 
+    class ZoomFullButton(QWidget):
+        def __init__(self, graph_viewer_window, parent=None):
+            super().__init__(parent)
+            # Keep a reference to the graphviewerwindow around
+            self.gvw = graph_viewer_window
+
+            # Load Icons
+            self.icons = IconLoader.load([
+                'zoom_out_map_FILL0_wght300_GRAD0_opsz24.svg'
+            ])
+
+            self.button = QPushButton(parent=self) 
+            self.button.setIcon(self.icons[0])
+            self.button.setFixedWidth(self.button.height())
+            self.button.setIconSize(QSize(self.button.width(), self.button.height()))
+            self.button.setStyleSheet(ControlRibbon.style_sheet)
+            self.button.clicked.connect(self.click)
+
+            self.setLayout(QVBoxLayout())
+            self.layout().addWidget(self.button)
+            self.layout().setContentsMargins(0,0,0,0)
+
+        @Slot()
+        def click(self, e):
+            self.gvw.centerAndFitNodes()
+            self.gvw.centerAndFitNodes()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -454,11 +483,13 @@ class ControlRibbon(QWidget):
         self.layout().setAlignment(Qt.AlignLeft)
 
         self.reset_button = ControlRibbon.ResetViewButton(graph_viewer_window=parent, parent=self)
+        self.zoom_full_button = ControlRibbon.ZoomFullButton(graph_viewer_window=parent, parent=self)
         self.orientation_button = ControlRibbon.OrienationButton(graph_viewer_window=parent, parent=self)
         self.shape_button = ControlRibbon.ShapeButton(graph_viewer_window=parent, parent=self)
         self.text_button = ControlRibbon.TextButton(graph_viewer_window=parent, parent=self)
 
         self.layout().addWidget(self.reset_button)
+        self.layout().addWidget(self.zoom_full_button)
         self.layout().addWidget(self.orientation_button)
         self.layout().addWidget(self.shape_button)
         self.layout().addWidget(self.text_button)
@@ -504,7 +535,6 @@ class GraphViewerWindow(QGraphicsView):
 
         # Center the Scene
         self.centerScene()
-
         self.control_ribbon = ControlRibbon(parent=self)
         self.control_ribbon.setGeometry(10, 10, 300, 50)  # Set geometry to position the button
 
@@ -550,7 +580,6 @@ class GraphViewerWindow(QGraphicsView):
         super().mouseReleaseEvent(e)
 
     def _checkHovering(self, e):
-        #item = self.itemAt(e.position().toPoint())
         items = self.items(e.position().toPoint()) 
 
         #i first unset all items no longer being hovered
@@ -615,6 +644,37 @@ class GraphViewerWindow(QGraphicsView):
         p0 = self.mapToScene(*self.centerOfView()) 
         self.setTransform(QTransform().translate(p0.x(), p0.y()), combine=True)
 
+    def centerAndFitNodes(self):
+        """
+        Center the scene on the middle of all VisualNodes in VisualGraph and adjust the zoom level such that all vnodes are visible.
+        Must be called twice to work properly LOL... 
+        """
+        # Calculate the combined bounding rectangle of all items
+        bounding_rect = QRectF()
+        for vnode in self._vgraph._node_to_vnode_map.values():
+            bounding_rect = bounding_rect.united(vnode.sceneBoundingRect())
+                        
+        # Adjust the zoom level to fit the items in view
+        #self.fitInView(bounding_rect, aspectRadioMode=Qt.AspectRatioMode.KeepAspectRatio)
+
+        ## Center the view on the point
+        #self.centerOn(bounding_rect.center())
+
+        # Calculate current visible rectangle
+        visible_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        # Calculate the scale factors
+        x_scale = visible_rect.width() / bounding_rect.width()
+        y_scale = visible_rect.height() / bounding_rect.height()
+        scale_factor = min(x_scale, y_scale)
+        # Apply the scale transformation
+        self.scale(scale_factor, scale_factor)
+        # Calculate the translation required to center on the desired point
+        delta = bounding_rect.center() - visible_rect.center()
+        #translation_point = self.mapFromScene(delta)
+        # Apply the translation
+        self.translate(-delta.x(), -delta.y())
+
+
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
@@ -663,6 +723,17 @@ class VisualGraph(QGraphicsItem):
         if graph:
             self.setGraph(graph)
         self._bounding_rect = self.childrenBoundingRect()
+
+    def getNodeCenterOfMass(self):
+        x_tot, y_tot = 0, 0 
+        num_nodes = len(self._node_to_vnode_map.values())
+        for vnode in self._node_to_vnode_map.values():
+            p0 = vnode.center()
+            x_tot = p0.x()
+            y_tot = p0.y()
+
+        return QPointF(x_tot / num_nodes, y_tot / num_nodes)
+
 
     def setNodeText(self, visible=True):
         for node in self._node_to_vnode_map.values():
@@ -720,8 +791,8 @@ class VisualGraph(QGraphicsItem):
             self._edge_to_vedge_map[(u,v,key)] = VisualEdge((u,v,key,data), parent=self)
 
     def paint(self, painter, option, widget=None):
-        painter.setBrush(self.brush)
-        painter.drawRoundedRect(self.boundingRect(), 5, 5)
+        #painter.setBrush(self.brush)
+        #painter.drawRoundedRect(self.boundingRect(), 5, 5)
 
         if not self._graph:
             return
