@@ -1,14 +1,53 @@
 
-import sys, pathlib
+import sys, pathlib, importlib
 import networkx as nx
 import numpy as np
 from PySide6.QtCore import (Qt, Signal, Slot, QPoint, QPointF, QLine, QLineF,
-        QRect, QRectF) 
+        QRect, QRectF, QSize) 
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout, QPushButton, QSizePolicy,
         QVBoxLayout, QGraphicsView, QGraphicsScene, QGraphicsPolygonItem, QGraphicsRectItem,
         QGraphicsEllipseItem, QGraphicsItem, QGraphicsTextItem, QGraphicsPathItem, QGraphicsLineItem, QGroupBox,
         QScrollArea, QFrame, QTabWidget, QSplitter)
-from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF, QFont
+from PySide6.QtGui import QPainterPath, QPainter, QTransform, QBrush, QPen, QColor, QPolygonF, QFont, QIcon, QPixmap
+
+# Local files
+#from importlib import resources as importlib_resources
+from importlib import resources as impresources
+from . import icons
+
+class IconLoader:
+    icon_folder = impresources.files(icons)
+
+    def __init__(self, filename_list):
+        self.icons = [self._load_icon(f) for f in filename_list]
+
+    def _load_icon(self, filename):
+        file_path = self.icon_folder / filename
+
+        #QColor selected_color('#4388FC');
+        color = QColor(67,136,252);
+        
+        # load gray-scale image (an alpha map)
+        pixmap = QPixmap(str(file_path))
+        
+        # initialize painter to draw on a pixmap and set composition mode
+        painter = QPainter(pixmap);
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn);
+        
+        painter.setBrush(color);
+        painter.setPen(color);
+        
+        painter.drawRect(pixmap.rect());
+
+        del painter
+        
+        # Here is our new colored icon!
+        return QIcon(pixmap)
+
+    @staticmethod
+    def load(filename_list):
+        loader = IconLoader(filename_list)
+        return loader.icons
 
 def onnxToMultiDiGraph(model):
     import onnx 
@@ -151,7 +190,7 @@ class GraphViewer(QWidget):
         # Children
         self._tabs = QTabWidget(parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
-        #self._controls = ControlButtons(parent=self)
+        self._controls = ControlButtons(parent=self)
 
         # Create views
         self._views = {}
@@ -162,11 +201,18 @@ class GraphViewer(QWidget):
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties_viewer)
-        #self.layout().addWidget(self._controls)
+        self.layout().addWidget(self._controls)
         self.layout().addWidget(self._splitter)
 
         # Connect
         self._tabs.currentChanged.connect(self.tabChanged)
+
+    def orientationButtonClick(self, idx):
+        print('click in parent.parent')
+        if idx == 0:
+            self._tabs.currentWidget().resetGraphVertical()
+        elif idx == 1:
+            self._tabs.currentWidget().resetGraphHorizontal()
 
     @Slot(int)
     def tabChanged(self, idx):
@@ -196,6 +242,9 @@ class GraphViewer(QWidget):
 
     def setView(self, view_name, graph):
         self._views[view_name].setGraph(graph)
+
+    # getCurrentGraphViewerWindow()
+    # getCurrentGraphViewerWindow()._vgraph.resetHorizontal
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -269,42 +318,57 @@ class PropertyViewerTextBox(QWidget):
 
 class ControlButtons(QWidget):
     class SwitchButton(QWidget):
-        def __init__(self, states, parent=None):
+        def __init__(self, icon_filename_list, callbacks, parent=None):
             super().__init__(parent)
-            self.states = states
-            self.state_idx = 0
+            self.icons = IconLoader.load(icon_filename_list)
 
-            self.button = QPushButton(self.states[self.state_idx], parent=self) 
-            self.button.setFont(QFont(self.button.font().family(), 24))
-            self.button.setFixedWidth(self.button.height()+2)
+            #self.icons = [QIcon(f) for f in icon_file_list]
+            #self.icons = icons
+            self.icon_idx = 0
+
+            #self.button = QPushButton(self.icons[self.icon_idx], parent=self) 
+            self.button = QPushButton(parent=self) 
+            self.button.setIcon(self.icons[self.icon_idx])
+            self.button.setFixedWidth(self.button.height())
+            self.button.setIconSize(QSize(self.button.width(), self.button.height()))
             self.button.setStyleSheet("QPushButton {padding: 0px; border-width: 0px;}")
             self.button.clicked.connect(self.click)
+            #self.button.clicked.connect(slot_function)
 
             self.setLayout(QVBoxLayout())
             self.layout().addWidget(self.button)
             self.layout().setContentsMargins(0,0,0,0)
 
+            # Save a list of additonal callbacks to trigger on click
+            self.callbacks = callbacks
+
         @Slot()
         def click(self, e):
             print('Click')
-            self.state_idx += 1
-            if self.state_idx >= len(self.states):
-                self.state_idx = 0
-            self.button.setText(self.states[self.state_idx])
+            self.icon_idx += 1
+            if self.icon_idx >= len(self.icons):
+                self.icon_idx = 0
+            self.button.setIcon(self.icons[self.icon_idx])
+            [fun(self.icon_idx) for fun in self.callbacks]
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
         #self.frame = QFrame(self)
         #self.frame.setLayout(QVBoxLayout())
 
         self.setLayout(QVBoxLayout())
         self.layout().setAlignment(Qt.AlignTop)
 
-        self.button1 = ControlButtons.SwitchButton(list("➡⬇"), parent=self)
-        self.button2 = ControlButtons.SwitchButton(list("◼⚫"), parent=self)
+        self.button1 = ControlButtons.SwitchButton([
+            'arrow_circle_down_FILL0_wght300_GRAD0_opsz24.svg',
+            'arrow_circle_right_FILL0_wght300_GRAD0_opsz24.svg'],
+            [self.parent().orientationButtonClick],
+            parent=self)
+        #self.button2 = ControlButtons.SwitchButton(list("◼⚫"), parent=self)
 
         self.layout().addWidget(self.button1)
-        self.layout().addWidget(self.button2)
+        #self.layout().addWidget(self.button2)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
 
 # Graph Viewer
@@ -340,6 +404,12 @@ class GraphViewerWindow(QGraphicsView):
 
         # Center the Scene
         self.centerScene()
+
+    def resetGraphHorizontal(self):
+        self.setGraph(self._graph, horizontal=True)
+        
+    def resetGraphVertical(self):
+        self.setGraph(self._graph)
 
     def setSceneRect(self):
         br = self.scene().itemsBoundingRect()
@@ -424,7 +494,7 @@ class GraphViewerWindow(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
-    def setGraph(self, graph):
+    def setGraph(self, graph, horizontal=False):
         self.scene().clear()
         
         # Convert graph (if not already a MultiDiGraph)
@@ -435,7 +505,7 @@ class GraphViewerWindow(QGraphicsView):
         elif 'onnx' in graph.__module__:
             self._graph = onnxToMultiDiGraph(graph)
 
-        self._vgraph = VisualGraph(self._graph)
+        self._vgraph = VisualGraph(self._graph, horizontal)
         self.scene().addItem(self._vgraph)
         self.setSceneRect()
 
@@ -463,7 +533,7 @@ class VisualGraph(QGraphicsItem):
         self._generation_map = {}
 
         if graph:
-            self.setGraph(graph)
+            self.setGraph(graph, horizontal)
         self._bounding_rect = self.childrenBoundingRect()
 
     def calculate_positions(self):
@@ -581,6 +651,12 @@ class VisualGraph(QGraphicsItem):
         self.create_visual_nodes(positions, horizontal)
         self.create_visual_edges()
         self._bounding_rect = self.childrenBoundingRect()
+
+    def resetGraphHorizontal(self):
+        self.setGraph(self._graph, horizontal=True)
+
+    def resetGraphVertical(self):
+        self.setGraph(self._graph, horizontal=False)
 
 class VisualEdge(QGraphicsItem):
     class ArrowHead(QGraphicsItem):
