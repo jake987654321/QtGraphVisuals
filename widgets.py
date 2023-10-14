@@ -416,6 +416,34 @@ class ControlRibbon(QWidget):
             self.button.setIcon(self.icons[self.state])
             self.gvw._vgraph.setNodeText(self.state)
 
+    class ResetViewButton(QWidget):
+        def __init__(self, graph_viewer_window, parent=None):
+            super().__init__(parent)
+            # Keep a reference to the graphviewerwindow around
+            self.gvw = graph_viewer_window
+
+            # Load Icons
+            self.icons = IconLoader.load([
+                'restart_alt_FILL0_wght300_GRAD0_opsz24.svg'
+            ])
+
+            self.button = QPushButton(parent=self) 
+            self.button.setIcon(self.icons[0])
+            self.button.setFixedWidth(self.button.height())
+            self.button.setIconSize(QSize(self.button.width(), self.button.height()))
+            self.button.setStyleSheet(ControlRibbon.style_sheet)
+            self.button.clicked.connect(self.click)
+
+            self.setLayout(QVBoxLayout())
+            self.layout().addWidget(self.button)
+            self.layout().setContentsMargins(0,0,0,0)
+
+        @Slot()
+        def click(self, e):
+            self.gvw.setGraph(self.gvw._graph)
+            self.gvw.centerScene()
+            self.gvw.setDefaultZoom()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -425,10 +453,12 @@ class ControlRibbon(QWidget):
         self.setLayout(QHBoxLayout())
         self.layout().setAlignment(Qt.AlignLeft)
 
+        self.reset_button = ControlRibbon.ResetViewButton(graph_viewer_window=parent, parent=self)
         self.orientation_button = ControlRibbon.OrienationButton(graph_viewer_window=parent, parent=self)
         self.shape_button = ControlRibbon.ShapeButton(graph_viewer_window=parent, parent=self)
         self.text_button = ControlRibbon.TextButton(graph_viewer_window=parent, parent=self)
 
+        self.layout().addWidget(self.reset_button)
         self.layout().addWidget(self.orientation_button)
         self.layout().addWidget(self.shape_button)
         self.layout().addWidget(self.text_button)
@@ -442,6 +472,11 @@ class GraphViewerWindow(QGraphicsView):
         super().__init__(parent)
         self._graph = graph
 
+        # Drawing states
+        self._draw_vertical = True
+        self._draw_text = True
+        self._draw_circles = True
+
         # Configure QGraphicsView
         self.setTransformationAnchor(QGraphicsView.NoAnchor)
         self.setResizeAnchor(QGraphicsView.NoAnchor)
@@ -452,12 +487,13 @@ class GraphViewerWindow(QGraphicsView):
         # Create/Configure the Scene
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
+        self.setSceneRect()
 
         self._vgraph = None
         self.setGraph(self._graph)
 
         # Set scene bounding rect
-        self.setSceneRect()
+        #self.setSceneRect()
 
         # State
         self._dragging = False
@@ -465,9 +501,6 @@ class GraphViewerWindow(QGraphicsView):
         self._selection_box = None
         self._hovering = []
 
-        self._draw_vertical = True
-        self._draw_text = True
-        self._draw_circles = True
 
         # Center the Scene
         self.centerScene()
@@ -478,20 +511,23 @@ class GraphViewerWindow(QGraphicsView):
     # Button Control helpers
     def toggleGraphOrientation(self):
         self._draw_vertical = not self._draw_vertical
-        self.setGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
+        self.setGraph(self._graph)
         self.centerScene()
 
     def toggleGraphNodeShape(self):
         self._draw_circles = not self._draw_circles
-        self.setGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
+        self.setGraph(self._graph)
 
     def setSceneRect(self):
         br = self.scene().itemsBoundingRect()
         size = QPointF(br.height(), br.width())*10
         tl, br = br.center()-size, br.center()+size
-        self.scene().setSceneRect(QRectF(tl, br))
+        #print(tl, br)
+        #self.scene().setSceneRect(QRectF(tl, br))
+        self.scene().setSceneRect(-float('inf'), -float('inf'), float('inf'), float('inf'))
 
     def mousePressEvent(self, e):
+        x,y = e.position().x(), e.position().y()
         if e.button() == Qt.LeftButton:
             item = self.itemAt(e.position().toPoint())
 
@@ -557,9 +593,23 @@ class GraphViewerWindow(QGraphicsView):
         else:
             zf = zoom_out_factor
 
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        # Save the old mouse position
+        old_pos = self.mapToScene(e.position().toPoint())
+
+        # Scale the scene
         self.scale(zf,zf)
-        self.setTransformationAnchor(QGraphicsView.NoAnchor)
+
+        # Reposition the scene so the 'mouse' stayed in the same spot
+        new_pos = self.mapToScene(e.position().toPoint())
+        delta = new_pos - old_pos
+        self.translate(delta.x(), delta.y())
+
+    def setDefaultZoom(self):
+        current_zf = self.transform().m11()
+
+        #self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.scale(1 / current_zf, 1 / current_zf)
+        #self.setTransformationAnchor(QGraphicsView.NoAnchor)
 
     def centerScene(self):
         p0 = self.mapToScene(*self.centerOfView()) 
@@ -568,7 +618,7 @@ class GraphViewerWindow(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
-    def setGraph(self, graph, vertical=True, show_text=True, circle_nodes=True):
+    def setGraph(self, graph):
         self.scene().clear()
         
         # Convert graph (if not already a MultiDiGraph)
@@ -579,9 +629,9 @@ class GraphViewerWindow(QGraphicsView):
         elif 'onnx' in graph.__module__:
             self._graph = onnxToMultiDiGraph(graph)
 
-        self._vgraph = VisualGraph(self._graph, vertical, show_text, circle_nodes)
+        self._vgraph = VisualGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
         self.scene().addItem(self._vgraph)
-        self.setSceneRect()
+        #self.setSceneRect()
 
         # reset-state
         self._dragging = False
@@ -670,6 +720,9 @@ class VisualGraph(QGraphicsItem):
             self._edge_to_vedge_map[(u,v,key)] = VisualEdge((u,v,key,data), parent=self)
 
     def paint(self, painter, option, widget=None):
+        painter.setBrush(self.brush)
+        painter.drawRoundedRect(self.boundingRect(), 5, 5)
+
         if not self._graph:
             return
 
@@ -711,9 +764,10 @@ class VisualGraph(QGraphicsItem):
             painter.drawLine(arrow_right)
 
     def boundingRect(self):
-        br = self.childrenBoundingRect()
-        size = QPointF(br.width(), br.height())
-        return QRectF(br.center()-size*2, br.center()+size*2)#self._bounding_rect
+        #br = self.childrenBoundingRect()
+        #size = QPointF(br.width(), br.height())
+        #return QRectF(br.center()-size*2, br.center()+size*2)#self._bounding_rect
+        return self.childrenBoundingRect()
 
     def childrenMoved(self, child):
         self._bounding_rect = self.childrenBoundingRect()
