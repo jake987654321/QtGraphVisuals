@@ -50,7 +50,17 @@ class IconLoader:
         return loader.icons
 
 def onnxToMultiDiGraph(model):
-    import onnx 
+    class HashableOnnxNode:
+        def __init__(self, proto, type_):
+            self.name = proto.name
+            self.proto = proto
+            self.type_ = type_ # Node / Input / Output
+            if type_ in ['Input', 'Output']:
+                self.op_type = type_
+            else:
+                self.op_type = proto.op_type
+            self.init_dict = {}
+
     def setVisualScheme(graph):
         # Set Visual Schemes
         for node_name,data in graph.nodes(data=True):
@@ -64,7 +74,7 @@ def onnxToMultiDiGraph(model):
             if 'conv' in node.op_type.lower():
                 vs['fillColor'] = 'darkBlue'
             elif 'pool' in node.op_type.lower():
-                vs['fillColor'] = 'darkgraphreen'
+                vs['fillColor'] = 'darkGreen'
             elif 'elu' in node.op_type.lower():
                 vs['fillColor'] = 'darkRed'
                 vs['size'] = [50,25]
@@ -75,60 +85,66 @@ def onnxToMultiDiGraph(model):
             graph.nodes[node_name]['properties']['inbound'] = list(graph.predecessors(node_name))
             graph.nodes[node_name]['properties']['outbound'] = list(graph.successors(node_name))
             graph.nodes[node_name]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.attribute)})
-            graph.nodes[node_name]['properties']['initializer'] = list(data['initializer'].keys())
 
         for u,v,key,data in graph.edges(keys=True, data=True):
-            txt = onnx.helper.printable_value_info(data['value'])
+            try:
+                txt = onnx.helper.printable_value_info(data.get('value', 0))
+            except:
+                txt = ''
             graph.edges[u,v,key]['properties'] = {'info': txt}
 
-    # Initialize a NetworkX MultiDiGraph
-    graph = nx.MultiDiGraph(name=model.graph.name)
+    G = nx.MultiDiGraph(name=model.graph.name)
 
     # Add nodes to the graph
-    for node in model.graph.node:
-        graph.add_node(node.name, node=node, initializer={})
+    for node_proto in model.graph.node:
+        hnode = HashableOnnxNode(node_proto, type_='Node')
+        G.add_node(hnode)
 
     # Add initializer data to the nodes
-    for init in model.graph.initializer:
-        for node in model.graph.node:
-            if init.name in node.input:
-                graph.nodes[node.name]['initializer'][init.name] = init
-    
+    for init_proto in model.graph.initializer:
+        for node in G.nodes:
+            if init_proto.name in node.proto.input:
+                node.init_dict[init_proto.name] = init_proto
+
     # Add edges to the graph
     name_to_value_map = {v.name:v for v in model.graph.value_info}
-    for u in model.graph.node:
-        for v in model.graph.node:
+    for u in G.nodes:
+        for v in G.nodes:
             if v is u:
                 continue
-            for out_index, value_name in enumerate(u.output):
-                if not value_name in v.input:
+
+            # Use v.input because this considers the Multi part in MultiDiGraph
+            for v_index, value_name in enumerate(v.proto.input):
+                if not value_name in u.proto.output:
                     continue
-                in_index = list(v.input).index(value_name)
-                value = name_to_value_map[value_name]
-                graph.add_edge(u.name, v.name, in_index=in_index,
-                    out_index=out_index, value=value)
+                u_index = list(u.proto.output).index(value_name)
+                value = name_to_value_map.get(value_name, None)
+                G.add_edge(u, v, u_index=u_index,
+                    v_index=v_index, value=value)
 
-    # Add input / output nodes (and edges) to the graph
-    for inout in list(model.graph.input) + list(model.graph.output):
-        for node in model.graph.node:
+    # Add input/output nodes
+    for input_proto in list(model.graph.input):
+        G.add_node(HashableOnnxNode(proto=input_proto, type_='Input'))
+    for output_proto in list(model.graph.output):
+        G.add_node(HashableOnnxNode(proto=output_proto, type_='Output'))
+    node_list = [n for n in G.nodes if n.type_=='Node']
 
-            # Add output node
-            if inout.name in node.output:
-                index = list(node.output).index(inout.name)
-                graph.add_node(inout.name, node=inout)
-                graph.add_edge(node.name, inout.name, in_index=index, out_index=0, value=inout)
-                break
+    # Add input/output edges
+    for u in [n for n in G.nodes if n.type_=='Input']:
+        for v in node_list:
+            for v_index, value_name in enumerate(v.proto.input):
+                if value_name ==  u.name:
+                    G.add_edge(u, v, u_index=0, v_index=v_index,
+                            value=u.proto)
 
-            # Add input node
-            if inout.name in node.input:
-                index = list(node.input).index(inout.name)
-                graph.add_node(inout.name, node=inout)
-                graph.add_edge(inout.name, node.name, in_index=0, out_index=index, value=inout)
-                break
+    for v in [n for n in G.nodes if n.type_=='Output']:
+        for u in node_list:
+            for u_index, value_name in enumerate(u.proto.output):
+                if value_name == v.name:
+                    G.add_edge(u, v, u_index=u_index, v_index=0,
+                            value=v.proto)
 
-    # Adds auxillary information to the graph for visualization purposes
-    setVisualScheme(graph)
-    return graph
+    return G
 
 def kerasToMultiDiGraph(model):
     def setVisualScheme(graph):
