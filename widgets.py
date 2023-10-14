@@ -79,8 +79,8 @@ def onnxToMultiDiGraph(model):
 
             graph.nodes[node]['properties'] = {}
             graph.nodes[node]['properties']['name'] = node.name
-            graph.nodes[node]['properties']['inbound'] = list(graph.predecessors(node))
-            graph.nodes[node]['properties']['outbound'] = list(graph.successors(node))
+            graph.nodes[node]['properties']['inbound'] = [node.name for node in graph.predecessors(node)]
+            graph.nodes[node]['properties']['outbound'] = [node.name for node in graph.successors(node)]
             if node.type_ == 'Node':
                 graph.nodes[node]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.proto.attribute)})
 
@@ -223,8 +223,7 @@ class GraphViewer(QWidget):
 
     @Slot(int)
     def tabChanged(self, idx):
-        if self._tabs.currentWidget():
-            self._tabs.currentWidget().centerScene()
+        pass
 
     def clearViews(self):
         for name, view in self._views.items():
