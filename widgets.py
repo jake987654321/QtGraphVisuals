@@ -190,7 +190,7 @@ class GraphViewer(QWidget):
         # Children
         self._tabs = QTabWidget(parent=self)
         self._properties_viewer = PropertiesViewer(parent=self)
-        self._controls = ControlButtons(parent=self)
+        #self._controls = ControlButtons(parent=self)
 
         # Create views
         self._views = {}
@@ -201,18 +201,11 @@ class GraphViewer(QWidget):
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.addWidget(self._tabs)
         self._splitter.addWidget(self._properties_viewer)
-        self.layout().addWidget(self._controls)
+        #self.layout().addWidget(self._controls)
         self.layout().addWidget(self._splitter)
 
         # Connect
         self._tabs.currentChanged.connect(self.tabChanged)
-
-    def orientationButtonClick(self, idx):
-        print('click in parent.parent')
-        if idx == 0:
-            self._tabs.currentWidget().resetGraphVertical()
-        elif idx == 1:
-            self._tabs.currentWidget().resetGraphHorizontal()
 
     @Slot(int)
     def tabChanged(self, idx):
@@ -316,40 +309,99 @@ class PropertyViewerTextBox(QWidget):
         self._name.setText(f"{name}")
         self._value.setText(f"{value}")
 
-class ControlButtons(QWidget):
-    class SwitchButton(QWidget):
-        def __init__(self, icon_filename_list, callbacks, parent=None):
+class ControlRibbon(QWidget):
+    style_sheet = """
+        QPushButton {padding: 0px; border-width: 0px; background: transparent}
+        QPushButton:hover {background: rgba(127,127,127,127)}
+        QPushButton:pressed {background: rgba(127,127,127,255)}
+    """
+
+    class OrienationButton(QWidget):
+        def __init__(self, graph_viewer_window, parent=None):
             super().__init__(parent)
-            self.icons = IconLoader.load(icon_filename_list)
+            # Keep a reference to the graphviewerwindow around
+            self.gvw = graph_viewer_window
 
-            #self.icons = [QIcon(f) for f in icon_file_list]
-            #self.icons = icons
-            self.icon_idx = 0
+            # Load Icons
+            self.icons = IconLoader.load([
+                'arrow_circle_right_FILL0_wght300_GRAD0_opsz24.svg',
+                'arrow_circle_down_FILL0_wght300_GRAD0_opsz24.svg'
+            ])
+            self.vertical = True
 
-            #self.button = QPushButton(self.icons[self.icon_idx], parent=self) 
             self.button = QPushButton(parent=self) 
-            self.button.setIcon(self.icons[self.icon_idx])
+            self.button.setIcon(self.icons[self.vertical])
             self.button.setFixedWidth(self.button.height())
             self.button.setIconSize(QSize(self.button.width(), self.button.height()))
-            self.button.setStyleSheet("QPushButton {padding: 0px; border-width: 0px;}")
+            self.button.setStyleSheet(ControlRibbon.style_sheet)
+
             self.button.clicked.connect(self.click)
-            #self.button.clicked.connect(slot_function)
 
             self.setLayout(QVBoxLayout())
             self.layout().addWidget(self.button)
             self.layout().setContentsMargins(0,0,0,0)
 
-            # Save a list of additonal callbacks to trigger on click
-            self.callbacks = callbacks
+        @Slot()
+        def click(self, e):
+            self.vertical = not self.vertical
+            self.button.setIcon(self.icons[self.vertical])
+            self.gvw.toggleGraphOrientation()
+
+    class ShapeButton(QWidget):
+        def __init__(self, graph_viewer_window, parent=None):
+            super().__init__(parent)
+            # Keep a reference to the graphviewerwindow around
+            self.gvw = graph_viewer_window
+
+            # Load Icons
+            self.icons = IconLoader.load([
+                'shape_line_FILL0_wght300_GRAD0_opsz24.svg'
+            ])
+
+            self.button = QPushButton(parent=self) 
+            self.button.setIcon(self.icons[0])
+            self.button.setFixedWidth(self.button.height())
+            self.button.setIconSize(QSize(self.button.width(), self.button.height()))
+            self.button.setStyleSheet(ControlRibbon.style_sheet)
+            self.button.clicked.connect(self.click)
+
+            self.setLayout(QVBoxLayout())
+            self.layout().addWidget(self.button)
+            self.layout().setContentsMargins(0,0,0,0)
 
         @Slot()
         def click(self, e):
-            print('Click')
-            self.icon_idx += 1
-            if self.icon_idx >= len(self.icons):
-                self.icon_idx = 0
-            self.button.setIcon(self.icons[self.icon_idx])
-            [fun(self.icon_idx) for fun in self.callbacks]
+            self.gvw.toggleGraphNodeShape()
+
+    class TextButton(QWidget):
+        def __init__(self, graph_viewer_window, parent=None):
+            super().__init__(parent)
+            # Keep a reference to the graphviewerwindow around
+            self.gvw = graph_viewer_window
+
+            # Load Icons
+            self.icons = IconLoader.load([
+                'subtitles_FILL0_wght300_GRAD0_opsz24.svg',
+                'subtitles_off_FILL0_wght300_GRAD0_opsz24.svg'
+            ])
+            self.state = True
+
+            self.button = QPushButton(parent=self) 
+            self.button.setIcon(self.icons[self.state])
+            self.button.setFixedWidth(self.button.height())
+            self.button.setIconSize(QSize(self.button.width(), self.button.height()))
+            self.button.setStyleSheet(ControlRibbon.style_sheet)
+            self.button.clicked.connect(self.click)
+
+            self.setLayout(QVBoxLayout())
+            self.layout().addWidget(self.button)
+            self.layout().setContentsMargins(0,0,0,0)
+
+        @Slot()
+        def click(self, e):
+            self.state = not self.state
+            self.button.setIcon(self.icons[self.state])
+            self.gvw._vgraph.setNodeText(self.state)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -357,18 +409,16 @@ class ControlButtons(QWidget):
         #self.frame = QFrame(self)
         #self.frame.setLayout(QVBoxLayout())
 
-        self.setLayout(QVBoxLayout())
-        self.layout().setAlignment(Qt.AlignTop)
+        self.setLayout(QHBoxLayout())
+        self.layout().setAlignment(Qt.AlignLeft)
 
-        self.button1 = ControlButtons.SwitchButton([
-            'arrow_circle_down_FILL0_wght300_GRAD0_opsz24.svg',
-            'arrow_circle_right_FILL0_wght300_GRAD0_opsz24.svg'],
-            [self.parent().orientationButtonClick],
-            parent=self)
-        #self.button2 = ControlButtons.SwitchButton(list("◼⚫"), parent=self)
+        self.orientation_button = ControlRibbon.OrienationButton(graph_viewer_window=parent, parent=self)
+        self.shape_button = ControlRibbon.ShapeButton(graph_viewer_window=parent, parent=self)
+        self.text_button = ControlRibbon.TextButton(graph_viewer_window=parent, parent=self)
 
-        self.layout().addWidget(self.button1)
-        #self.layout().addWidget(self.button2)
+        self.layout().addWidget(self.orientation_button)
+        self.layout().addWidget(self.shape_button)
+        self.layout().addWidget(self.text_button)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
 
 # Graph Viewer
@@ -402,14 +452,24 @@ class GraphViewerWindow(QGraphicsView):
         self._selection_box = None
         self._hovering = []
 
+        self._draw_vertical = True
+        self._draw_text = True
+        self._draw_circles = True
+
         # Center the Scene
         self.centerScene()
 
-    def resetGraphHorizontal(self):
-        self.setGraph(self._graph, horizontal=True)
-        
-    def resetGraphVertical(self):
-        self.setGraph(self._graph)
+        self.control_ribbon = ControlRibbon(parent=self)
+        self.control_ribbon.setGeometry(10, 10, 300, 50)  # Set geometry to position the button
+
+    # Button Control helpers
+    def toggleGraphOrientation(self):
+        self._draw_vertical = not self._draw_vertical
+        self.setGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
+
+    def toggleGraphNodeShape(self):
+        self._draw_circles = not self._draw_circles
+        self.setGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
 
     def setSceneRect(self):
         br = self.scene().itemsBoundingRect()
@@ -494,7 +554,7 @@ class GraphViewerWindow(QGraphicsView):
     def centerOfView(self):
         return (self.size().width()-1)/2, (self.size().height()-1)/2
 
-    def setGraph(self, graph, horizontal=False):
+    def setGraph(self, graph, vertical=True, show_text=True, circle_nodes=True):
         self.scene().clear()
         
         # Convert graph (if not already a MultiDiGraph)
@@ -505,7 +565,7 @@ class GraphViewerWindow(QGraphicsView):
         elif 'onnx' in graph.__module__:
             self._graph = onnxToMultiDiGraph(graph)
 
-        self._vgraph = VisualGraph(self._graph, horizontal)
+        self._vgraph = VisualGraph(self._graph, vertical, show_text, circle_nodes)
         self.scene().addItem(self._vgraph)
         self.setSceneRect()
 
@@ -514,8 +574,12 @@ class GraphViewerWindow(QGraphicsView):
         self._selected = None
 
 class VisualGraph(QGraphicsItem):
-    def __init__(self, graph=None, horizontal=False, parent=None):
+    def __init__(self, graph=None, vertical=False, show_text=True, circle_nodes=True, parent=None):
         super().__init__(parent=parent)
+        # State
+        self.show_text = show_text
+        self.circle_nodes = circle_nodes
+        self.horizontal = not vertical
 
         # Drawing Config
         self.node_size = 75
@@ -533,8 +597,12 @@ class VisualGraph(QGraphicsItem):
         self._generation_map = {}
 
         if graph:
-            self.setGraph(graph, horizontal)
+            self.setGraph(graph)
         self._bounding_rect = self.childrenBoundingRect()
+
+    def setNodeText(self, visible=True):
+        for node in self._node_to_vnode_map.values():
+            node.text.setVisible(visible)
 
     def calculate_positions(self):
         x, y = 0, 0
@@ -571,16 +639,16 @@ class VisualGraph(QGraphicsItem):
 
         return positions
 
-    def create_visual_nodes(self, positions, horizontal=False):
+    def create_visual_nodes(self, positions):
         for node,pos in positions.items():
-            if horizontal:
+            if self.horizontal:
                 l,t = pos[1]-self.node_size/2, pos[0]-self.node_size/2
             else:
                 l,t = pos[0]-self.node_size/2, pos[1]-self.node_size/2
 
             visual_scheme = self._graph.nodes[node].get('visual_scheme', {})
             self._node_to_vnode_map[node] = VisualNode(node, QPointF(l,t),
-                    visual_scheme, parent=self)
+                    visual_scheme, self.circle_nodes, parent=self)
 
     def create_visual_edges(self):
         self._edge_to_vedge_map.clear()
@@ -645,18 +713,12 @@ class VisualGraph(QGraphicsItem):
         for u,v,idx in self._graph.out_edges(node, keys=True):
             self._edge_to_vedge_map[(u,v,idx)].updatePath()
 
-    def setGraph(self, graph, horizontal=False):
+    def setGraph(self, graph):
         self._graph = nx.MultiDiGraph(graph)
         positions = self.calculate_positions()
-        self.create_visual_nodes(positions, horizontal)
+        self.create_visual_nodes(positions)
         self.create_visual_edges()
         self._bounding_rect = self.childrenBoundingRect()
-
-    def resetGraphHorizontal(self):
-        self.setGraph(self._graph, horizontal=True)
-
-    def resetGraphVertical(self):
-        self.setGraph(self._graph, horizontal=False)
 
 class VisualEdge(QGraphicsItem):
     class ArrowHead(QGraphicsItem):
@@ -859,18 +921,23 @@ class VisualNode(QGraphicsItem):
             painter.setBrush(self.brush)
             painter.drawRoundedRect(self.boundingRect(), 5, 5)
 
-    def __init__(self, node, pos, visual_scheme, parent=None):
+    def __init__(self, node, pos, visual_scheme, circle, parent=None):
         super().__init__(parent)
         # Keep reference to node
         self.graph = self.parentItem()._graph
         self.node = node
+        self.circle = circle
 
         # set node config
         self.node_label, self.pen = None, None
         self.brush, self.size = None, None
         self.setVisualScheme()
 
-        self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
+        if self.circle:
+            self.shell = QGraphicsEllipseItem(0, 0, self.size[0], self.size[1], parent=self)
+        else:
+            self.shell = QGraphicsRectItem(0, 0, self.size[0], self.size[1], parent=self)
+
         self.shell.setPen(self.pen)
         self.shell.setBrush(self.brush)
         self.shell.setFlag(QGraphicsItem.ItemStacksBehindParent, enabled=True)
@@ -889,6 +956,7 @@ class VisualNode(QGraphicsItem):
 
         # set node shell
         #self.background.setBoundingRect(self.boundingRect())
+
         super().setPos(pos - self.boundingRect().center())
 
     def setVisualScheme(self):
