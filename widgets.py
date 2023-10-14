@@ -50,6 +50,7 @@ class IconLoader:
         return loader.icons
 
 def onnxToMultiDiGraph(model):
+    import onnx
     class HashableOnnxNode:
         def __init__(self, proto, type_):
             self.name = proto.name
@@ -63,12 +64,8 @@ def onnxToMultiDiGraph(model):
 
     def setVisualScheme(graph):
         # Set Visual Schemes
-        for node_name,data in graph.nodes(data=True):
-            node = data['node']
-            vs = {'boundaySize': 2, 'size': 50, 'label':node_name}
-            if isinstance(node, onnx.ValueInfoProto):
-                graph.nodes[node_name]['visual_scheme'] = vs
-                continue
+        for node in graph.nodes():
+            vs = {'boundarySize': 2, 'size': 50}
 
             vs['label'] = node.op_type.lower()
             if 'conv' in node.op_type.lower():
@@ -78,13 +75,14 @@ def onnxToMultiDiGraph(model):
             elif 'elu' in node.op_type.lower():
                 vs['fillColor'] = 'darkRed'
                 vs['size'] = [50,25]
-            graph.nodes[node_name]['visual_scheme'] = vs
+            graph.nodes[node]['visual_scheme'] = vs
 
-            graph.nodes[node_name]['properties'] = {}
-            graph.nodes[node_name]['properties']['name'] = node_name
-            graph.nodes[node_name]['properties']['inbound'] = list(graph.predecessors(node_name))
-            graph.nodes[node_name]['properties']['outbound'] = list(graph.successors(node_name))
-            graph.nodes[node_name]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.attribute)})
+            graph.nodes[node]['properties'] = {}
+            graph.nodes[node]['properties']['name'] = node.name
+            graph.nodes[node]['properties']['inbound'] = list(graph.predecessors(node))
+            graph.nodes[node]['properties']['outbound'] = list(graph.successors(node))
+            if node.type_ == 'Node':
+                graph.nodes[node]['properties'].update({attr.name: onnx.helper.get_attribute_value(attr) for attr in list(node.proto.attribute)})
 
         for u,v,key,data in graph.edges(keys=True, data=True):
             try:
@@ -143,7 +141,7 @@ def onnxToMultiDiGraph(model):
                 if value_name == v.name:
                     G.add_edge(u, v, u_index=u_index, v_index=0,
                             value=v.proto)
-
+    setVisualScheme(G)
     return G
 
 def kerasToMultiDiGraph(model):
@@ -482,6 +480,7 @@ class GraphViewerWindow(QGraphicsView):
     def toggleGraphOrientation(self):
         self._draw_vertical = not self._draw_vertical
         self.setGraph(self._graph, self._draw_vertical, self._draw_text, self._draw_circles)
+        self.centerScene()
 
     def toggleGraphNodeShape(self):
         self._draw_circles = not self._draw_circles
