@@ -47,6 +47,9 @@ class VisualGraph(QGraphicsItem):
 
         return QPointF(x_tot / num_nodes, y_tot / num_nodes)
 
+    def getProperties(self):
+        defaults = {'number of nodes': self._graph.number_of_nodes(), 'number of edges': self._graph.number_of_edges()}
+        return self._graph.graph.get('properties', defaults) 
 
     def setNodeText(self, visible=True):
         for node in self._node_to_vnode_map.values():

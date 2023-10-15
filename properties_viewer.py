@@ -36,9 +36,6 @@ class PropertiesViewer(QGroupBox):
 
         # Configure
         self.setLayout(QVBoxLayout())
-        #self.setMinimumHeight(300)
-        #self.setMinimumWidth(300)
-        #self.setMaximumWidth(300)
         self.setTitle('Properties')
 
         self.scroll = QScrollArea(parent=self)

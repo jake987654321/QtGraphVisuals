@@ -26,8 +26,6 @@ class GraphViewer(QWidget):
 
         # Children
         self._tabs = QTabWidget(parent=self)
-        self._properties_viewer = PropertiesViewer(parent=self)
-        #self._controls = ControlButtons(parent=self)
 
         # Create views
         self._views = {}
@@ -35,11 +33,7 @@ class GraphViewer(QWidget):
 
         # Layout
         self.setLayout(QHBoxLayout())
-        self._splitter = QSplitter(Qt.Horizontal)
-        self._splitter.addWidget(self._tabs)
-        self._splitter.addWidget(self._properties_viewer)
-        #self.layout().addWidget(self._controls)
-        self.layout().addWidget(self._splitter)
+        self.layout().addWidget(self._tabs)
 
         # Connect
         self._tabs.currentChanged.connect(self.tabChanged)
@@ -64,20 +58,16 @@ class GraphViewer(QWidget):
     def addView(self, view_name, graph):
         if view_name in self._views:
             raise ValueError(f"{view_name} already exsists")
-        gv = GraphViewerWindow(graph, parent=self)
-        self._views[view_name] = gv
-        gv.clicked.connect(self._properties_viewer.setConfig)
-        self._tabs.addTab(gv, view_name)
+        gvwp = GraphViewerWindowAndProperties(graph, parent=self)
+        self._views[view_name] = gvwp
+        self._tabs.addTab(gvwp, view_name)
 
     def setView(self, view_name, graph):
-        self._views[view_name].setGraph(graph)
-
-    # getCurrentGraphViewerWindow()
-    # getCurrentGraphViewerWindow()._vgraph.resetHorizontal
+        self._views[view_name]._gvw.setGraph(graph)
 
     def showEvent(self, e):
         super().showEvent(e)
-        self._tabs.currentWidget().centerScene()
+        self._tabs.currentWidget()._gvw.centerScene()
 
 # Graph Viewer
 class IconLoader:
@@ -285,6 +275,29 @@ class ControlRibbon(QWidget):
         self.layout().addWidget(self.text_button)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Maximum)
 
+class GraphViewerWindowAndProperties(QWidget):
+    def __init__(self, graph=None, parent=None):
+        super().__init__(parent)
+
+        self.setLayout(QHBoxLayout())
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._gvw = GraphViewerWindow(graph, parent=self)
+        self._properties_viewer = PropertiesViewer(parent=self)
+        self._splitter.addWidget(self._gvw)
+        self._splitter.addWidget(self._properties_viewer)
+        self.layout().addWidget(self._splitter)
+        
+        # Connect properties viewer and gvw, initalize w/ graph properties
+        self._gvw.clicked.connect(self._properties_viewer.setConfig)
+        self._properties_viewer.setConfig(self._gvw._vgraph.getProperties())
+
+        # Resize stuff
+        total_width = self._splitter.width() - self._splitter.handleWidth()
+        self._splitter.setSizes([2 * total_width // 3, total_width // 3])
+
+        # Recenter gvw
+        self._gvw.centerScene()
+
 class GraphViewerWindow(QGraphicsView):
     clicked = Signal(tuple)
 
@@ -312,18 +325,12 @@ class GraphViewerWindow(QGraphicsView):
         self._vgraph = None
         self.setGraph(self._graph)
 
-        # Set scene bounding rect
-        #self.setSceneRect()
-
         # State
         self._dragging = False
         self._selected = None
         self._selection_box = None
         self._hovering = []
 
-
-        # Center the Scene
-        self.centerScene()
         self.control_ribbon = ControlRibbon(parent=self)
         self.control_ribbon.setGeometry(10, 10, 300, 50)  # Set geometry to position the button
 
@@ -366,6 +373,9 @@ class GraphViewerWindow(QGraphicsView):
             if self._selected:
                 self.clicked.emit(self._selected.getProperties())
                 #self.scene().setSceneRect(self.scene().itemsBoundingRect())
+            else:
+                self.clicked.emit(self._vgraph.getProperties())
+
         super().mouseReleaseEvent(e)
 
     def _checkHovering(self, e):
