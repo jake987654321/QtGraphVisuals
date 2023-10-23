@@ -14,7 +14,7 @@ $ pip install QtGraphVisuals
 $ python3 -m QtGraphVisuals
 ```
 
-Viola!
+Voila!
 
 Main features are: 
 - Directed Graph visualisation: This library visualizes nx.DiGraph/MultiDigraph and also supports Keras / Onnx models.
